@@ -1,8 +1,11 @@
+-- config.lua
 local config = {}
 
-config.WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p3jtZCq69RV6st5q3bXHTDdgMe9NZeK_agQVMQT_QS0KTpxRZRQvqeGbotNTCMa"
+-- Discord webhook URL
+config.WEBHOOK_URL = "https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE"
 
-config.fieldThumbnails = {
+-- Field thumbnails mapping
+config.FIELD_THUMBNAILS = {
     ["Sunflower Field"] = "https://static.wikia.nocookie.net/bee-swarm-simulator/images/e/ef/Hivesticker_sunflower_field_stamp.png",
     ["Dandelion Field"] = "https://static.wikia.nocookie.net/bee-swarm-simulator/images/6/64/Hivesticker_dandelion_field_stamp.png",
     ["Mushroom Field"] = "https://static.wikia.nocookie.net/bee-swarm-simulator/images/b/b0/Hivesticker_mushroom_field_stamp.png",
