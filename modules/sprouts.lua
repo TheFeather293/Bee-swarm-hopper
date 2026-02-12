@@ -1,8 +1,34 @@
 local Workspace = game:GetService("Workspace")
 
+-- Wait for global to be ready
+local maxWait = 5
+local waited = 0
+while (not _G.BSSMonitor or not _G.BSSMonitor.config or not _G.BSSMonitor.utils) and waited < maxWait do
+    task.wait(0.1)
+    waited = waited + 0.1
+end
+
+-- Verify we have what we need
+if not _G.BSSMonitor then
+    error("_G.BSSMonitor is not defined!")
+end
+
+if not _G.BSSMonitor.config then
+    error("_G.BSSMonitor.config is not loaded!")
+end
+
+if not _G.BSSMonitor.utils then
+    error("_G.BSSMonitor.utils is not loaded!")
+end
+
 -- Access shared modules from global
 local config = _G.BSSMonitor.config
 local utils = _G.BSSMonitor.utils
+
+-- Debug: Verify we can access functions
+print("[SPROUT DEBUG] Config webhook:", config.WEBHOOK_URL and "FOUND" or "MISSING")
+print("[SPROUT DEBUG] Utils.sendWebhook:", type(utils.sendWebhook))
+print("[SPROUT DEBUG] Utils.getFieldName:", type(utils.getFieldName))
 
 local SproutMonitor = {}
 SproutMonitor.sentSprouts = {}
@@ -27,9 +53,15 @@ function SproutMonitor.sendSproutWebhook(sprout)
     if SproutMonitor.sentSprouts[sprout] then return end
     SproutMonitor.sentSprouts[sprout] = true
     
+    -- Debug
+    print("[SPROUT] Processing sprout:", sprout.Name)
+    
     local pos = sprout.Position
     local fieldName = utils.getFieldName(pos)
     local sproutType, embedColor, emoji = SproutMonitor.getSproutType(sprout.BrickColor.Name)
+    
+    print("[SPROUT] Field detected:", fieldName)
+    print("[SPROUT] Type detected:", sproutType)
     
     -- Get pollen
     local pollenText = "Unknown"
@@ -43,6 +75,8 @@ function SproutMonitor.sendSproutWebhook(sprout)
     local serverInfo = utils.getServerInfo()
     local links = utils.createJoinLinks(serverInfo.placeId, serverInfo.jobId)
     local thumbnailUrl = config.fieldThumbnails[fieldName]
+    
+    print("[SPROUT] Thumbnail URL:", thumbnailUrl or "NOT FOUND")
     
     local embed = {
         title = string.format("%s %s Sprout Detected!", emoji, sproutType),
@@ -84,25 +118,38 @@ function SproutMonitor.sendSproutWebhook(sprout)
         embed.thumbnail = { url = thumbnailUrl }
     end
     
-    utils.sendWebhook(config.WEBHOOK_URL, { embeds = {embed} })
-    print("[SPROUT] Detected:", sproutType, "in", fieldName)
+    local webhookSuccess = utils.sendWebhook(config.WEBHOOK_URL, { embeds = {embed} })
+    
+    if webhookSuccess then
+        print(string.format("[SPROUT] ✓ Webhook sent: %s %s in %s", emoji, sproutType, fieldName))
+    else
+        warn(string.format("[SPROUT] ✗ Webhook failed: %s %s in %s", emoji, sproutType, fieldName))
+    end
 end
 
 function SproutMonitor.init()
+    print("[SPROUT MONITOR] Starting initialization...")
+    
     local sproutsFolder = Workspace:WaitForChild("Sprouts")
+    print("[SPROUT MONITOR] Found Sprouts folder")
     
     -- Check existing sprouts
+    local existingSprouts = 0
     for _, sprout in pairs(sproutsFolder:GetChildren()) do
         if sprout:IsA("MeshPart") then
+            existingSprouts = existingSprouts + 1
             task.spawn(function()
                 SproutMonitor.sendSproutWebhook(sprout)
             end)
         end
     end
     
+    print(string.format("[SPROUT MONITOR] Found %d existing sprout(s)", existingSprouts))
+    
     -- Listen for new sprouts
     sproutsFolder.ChildAdded:Connect(function(sprout)
         if sprout:IsA("MeshPart") then
+            print("[SPROUT MONITOR] New sprout detected!")
             task.wait(0.5)
             SproutMonitor.sendSproutWebhook(sprout)
         end
@@ -113,7 +160,7 @@ function SproutMonitor.init()
         SproutMonitor.sentSprouts[sprout] = nil
     end)
     
-    print("[SPROUT MONITOR] Initialized ✓")
+    print("[SPROUT MONITOR] ✓ Initialized and monitoring")
 end
 
 return SproutMonitor
