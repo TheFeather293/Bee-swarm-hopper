@@ -14,7 +14,7 @@ function utils.sendWebhook(webhookUrl, data)
     end)
     
     if not success then
-        warn("Webhook failed:", err)
+        warn("[WEBHOOK ERROR]", err)
     end
     
     return success

@@ -1,6 +1,8 @@
 local Workspace = game:GetService("Workspace")
-local config = require(script.Parent.Parent.config)
-local utils = require(script.Parent.Parent.utils)
+
+-- Access shared modules from global
+local config = _G.BSSMonitor.config
+local utils = _G.BSSMonitor.utils
 
 local SproutMonitor = {}
 SproutMonitor.sentSprouts = {}
