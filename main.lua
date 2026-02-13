@@ -8,10 +8,9 @@ local WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p
 
 -- Configuration
 local PLACE_ID = game.PlaceId
-local HOP_DELAY = 0.5 -- Minimal delay (0.5 seconds)
-local CHECK_TIMEOUT = 2 -- Max time to wait for sprouts folder
+local HOP_DELAY = 0.5
 
--- Field thumbnail mapping (using exact field names from FlowerZones)
+-- Field thumbnail mapping
 local fieldThumbnails = {
     ["Sunflower Field"] = "https://static.wikia.nocookie.net/bee-swarm-simulator/images/e/ef/Hivesticker_sunflower_field_stamp.png",
     ["Dandelion Field"] = "https://static.wikia.nocookie.net/bee-swarm-simulator/images/6/64/Hivesticker_dandelion_field_stamp.png",
@@ -32,12 +31,7 @@ local fieldThumbnails = {
     ["Coconut Field"] = "https://static.wikia.nocookie.net/bee-swarm-simulator/images/6/62/Hivesticker_coconut_field_stamp.png"
 }
 
--- Cache server list for faster hopping
-local cachedServers = nil
-local lastServerFetch = 0
-local SERVER_CACHE_TIME = 30 -- Cache servers for 30 seconds
-
--- Function to get field name from position (optimized)
+-- Function to get field name from position
 local function getFieldName(pos)
     local FlowerZones = Workspace:FindFirstChild("FlowerZones")
     if not FlowerZones then return "Unknown Field" end
@@ -57,60 +51,78 @@ local function getFieldName(pos)
     return "Unknown Field"
 end
 
--- Function to get servers (with caching)
-local function getServers()
-    local currentTime = tick()
-    
-    -- Use cache if recent
-    if cachedServers and (currentTime - lastServerFetch) < SERVER_CACHE_TIME then
-        return cachedServers
-    end
-    
-    local success, result = pcall(function()
-        return HttpService:JSONDecode(game:HttpGet(
-            "https://games.roblox.com/v1/games/" .. PLACE_ID .. "/servers/Public?sortOrder=Asc&limit=100"
-        ))
-    end)
-    
-    if success and result and result.data then
-        cachedServers = result.data
-        lastServerFetch = currentTime
-        return result.data
-    end
-    
-    return nil
-end
-
--- Function to server hop (optimized)
+-- Function to server hop with retry
 local function serverHop()
-    print("[HOP] Finding server...")
+    print("[HOP] Searching for new server...")
     
-    local servers = getServers()
+    local maxAttempts = 3
+    local attempt = 1
     
-    if servers then
-        -- Filter valid servers
-        local validServers = {}
-        for _, server in pairs(servers) do
-            if server.id ~= game.JobId and server.playing < server.maxPlayers then
-                table.insert(validServers, server)
-            end
-        end
-        
-        if #validServers > 0 then
-            local targetServer = validServers[math.random(1, #validServers)]
-            print(string.format("[HOP] → %d/%d players", targetServer.playing, targetServer.maxPlayers))
+    while attempt <= maxAttempts do
+        local success, err = pcall(function()
+            local serversUrl = string.format(
+                "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
+                PLACE_ID
+            )
             
-            TeleportService:TeleportToPlaceInstance(PLACE_ID, targetServer.id, Players.LocalPlayer)
+            local serversJson = game:HttpGet(serversUrl)
+            local servers = HttpService:JSONDecode(serversJson)
+            
+            if servers and servers.data then
+                local validServers = {}
+                
+                for _, server in pairs(servers.data) do
+                    if server.id ~= game.JobId and server.playing < server.maxPlayers then
+                        table.insert(validServers, server)
+                    end
+                end
+                
+                if #validServers > 0 then
+                    local targetServer = validServers[math.random(1, #validServers)]
+                    print(string.format("[HOP] Found server with %d/%d players", targetServer.playing, targetServer.maxPlayers))
+                    print("[HOP] Teleporting now...")
+                    
+                    -- Use teleport async for better reliability
+                    local teleportSuccess = pcall(function()
+                        TeleportService:TeleportToPlaceInstance(
+                            PLACE_ID,
+                            targetServer.id,
+                            Players.LocalPlayer
+                        )
+                    end)
+                    
+                    if teleportSuccess then
+                        -- Wait for teleport to complete
+                        task.wait(10)
+                        return
+                    else
+                        warn("[HOP] Teleport failed, retrying...")
+                    end
+                else
+                    print("[HOP] No valid servers found, using fallback...")
+                    TeleportService:Teleport(PLACE_ID, Players.LocalPlayer)
+                    task.wait(10)
+                    return
+                end
+            end
+        end)
+        
+        if not success then
+            warn(string.format("[HOP] Attempt %d failed: %s", attempt, tostring(err)))
+            attempt = attempt + 1
+            task.wait(1)
+        else
             return
         end
     end
     
-    -- Fallback: Random server
-    print("[HOP] → Random server")
+    -- Final fallback
+    print("[HOP] All attempts failed, using simple teleport...")
     TeleportService:Teleport(PLACE_ID, Players.LocalPlayer)
+    task.wait(10)
 end
 
--- Function to send webhook for a sprout (non-blocking)
+-- Function to send webhook
 local function sendSproutWebhook(sprout)
     task.spawn(function()
         local pos = sprout.Position
@@ -222,7 +234,7 @@ local function sendSproutWebhook(sprout)
     end)
 end
 
--- Main logic (ultra-fast)
+-- Main logic
 print("[HOPPER] Checking server...")
 
 local sproutsFolder = Workspace:FindFirstChild("Sprouts")
@@ -232,9 +244,9 @@ if sproutsFolder then
     for _, sprout in pairs(sproutsFolder:GetChildren()) do
         if sprout:IsA("MeshPart") then
             foundSprout = true
-            sendSproutWebhook(sprout) -- Non-blocking
+            sendSproutWebhook(sprout)
             print("[✓] Sprout detected! Webhook sending...")
-            task.wait(HOP_DELAY) -- Minimal delay
+            task.wait(HOP_DELAY)
             break
         end
     end
@@ -244,5 +256,5 @@ if not foundSprout then
     print("[✗] No sprouts")
 end
 
--- Hop immediately
+-- Hop to next server
 serverHop()
