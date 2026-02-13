@@ -4,17 +4,19 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local request = request or http_request or syn.request
-local WEBHOOK_URL = "https://discord.com/api/webhooks/1471934269462024217/0mVk1Hbl4Fi_1EtrFGPkwhE3fUyjMBcg7rwEwPpW1clj8l_Gs94C2h0seASRbspsTpIA"
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p3jtZCq69RV6st5q3bXHTDdgMe9NZeK_agQVMQT_QS0KTpxRZRQvqeGbotNTCMa"
 
 -- Configuration
 local PLACE_ID = game.PlaceId
 local HOP_DELAY = 1
+local TELEPORT_TIMEOUT = 10 -- Seconds before considering teleport failed
 
 -- Server hop state
 local file = {}
 local file2 = "sprout-hop/" .. Players.LocalPlayer.UserId .. ".json"
-local esheposidim = false -- "we are hopping" flag
-local hop = false -- "teleport in progress" flag
+local esheposidim = false
+local hop = false
+local teleportStartTime = 0
 
 -- Create folder and load history
 pcall(function() 
@@ -33,7 +35,7 @@ end)
 local function savehist()
     local c = 0
     for _ in pairs(file) do c = c + 1 end
-    if c >= 50 then file = {} end -- Clear after 50 servers
+    if c >= 50 then file = {} end
     pcall(function() 
         writefile(file2, HttpService:JSONEncode(file)) 
     end)
@@ -199,6 +201,7 @@ local function go(jid)
     
     hop = true
     esheposidim = true
+    teleportStartTime = tick()
     file[jid] = os.time()
     savehist()
     
@@ -216,6 +219,25 @@ TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, erro
         warn(string.format("[HOP] Teleport failed: %s - %s", tostring(teleportResult), tostring(errorMessage)))
         hop = false
         esheposidim = false
+    end
+end)
+
+-- Teleport timeout monitor
+task.spawn(function()
+    while task.wait(1) do
+        if hop and teleportStartTime > 0 then
+            local elapsed = tick() - teleportStartTime
+            
+            if elapsed > TELEPORT_TIMEOUT then
+                warn(string.format("[HOP] Teleport timeout! (%d seconds elapsed)", math.floor(elapsed)))
+                warn("[HOP] Resetting and trying next server...")
+                
+                -- Reset flags
+                hop = false
+                esheposidim = false
+                teleportStartTime = 0
+            end
+        end
     end
 end)
 
@@ -286,7 +308,5 @@ print("[HOP] Starting server hop cycle...")
 while task.wait(3) do
     if not esheposidim and not hop then
         pcall(serverHop)
-    else
-        print("[HOP] Waiting for teleport to complete...")
     end
 end
