@@ -138,7 +138,7 @@ local function sendSproutWebhook(sprout)
             {
                 name = "📍 Position",
                 value = string.format("```%.2f, %.2f, %.2f```", pos.X, pos.Y, pos.Z),
-                inline = false
+                inline = true
             },
             {
                 name = "🌸 Pollen Left",
@@ -153,7 +153,7 @@ local function sendSproutWebhook(sprout)
             {
                 name = "😳 Players",
                 value = string.format("```%d/%d```", playerCount, maxPlayers),
-                inline = false
+                inline = true
             },
             {
                 name = "🔗 Join Server",
