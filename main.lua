@@ -4,7 +4,7 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local request = request or http_request or syn.request
-local WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p3jtZCq69RV6st5q3bXHTDdgMe9NZeK_agQVMQT_QS0KTpxRZRQvqeGbotNTCMa"
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1471934269462024217/0mVk1Hbl4Fi_1EtrFGPkwhE3fUyjMBcg7rwEwPpW1clj8l_Gs94C2h0seASRbspsTpIA"
 
 -- Configuration
 local PLACE_ID = game.PlaceId
@@ -268,17 +268,27 @@ end
 -- Check for sprouts
 local function getspr()
     local s = Workspace:FindFirstChild("Sprouts")
-    if not s then return end
+    if not s then 
+        print("[DEBUG] Sprouts folder not found in Workspace")
+        return 
+    end
     
+    print("[DEBUG] Sprouts folder found, checking children...")
+    local childCount = 0
     for _, sprout in ipairs(s:GetChildren()) do
+        childCount = childCount + 1
+        print(string.format("[DEBUG] Child %d: %s (ClassName: %s)", childCount, sprout.Name, sprout.ClassName))
         if sprout:IsA("MeshPart") then
+            print("[DEBUG] Found valid MeshPart sprout!")
             return sprout
         end
     end
+    print(string.format("[DEBUG] Checked %d children, no MeshPart sprouts found", childCount))
 end
 
 -- Main logic
 print("[HOPPER] Checking current server...")
+print("[DEBUG] Workspace children:", Workspace:GetChildren())
 
 local sprout = getspr()
 
