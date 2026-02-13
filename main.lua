@@ -9,88 +9,8 @@ local WEBHOOK_URL = "https://discord.com/api/webhooks/1471934269462024217/0mVk1H
 -- Configuration
 local PLACE_ID = game.PlaceId
 local HOP_DELAY = 1
-local TELEPORT_TIMEOUT = 8 -- Seconds before trying next server
-local MIN_PLAYERS_TO_JOIN = 0 -- Accept ANY server, even empty (changed from 1)
-local PREFER_POPULATED_SERVERS = true -- Prioritize servers with more players (older servers)
-
--- Server hop state - EACH ACCOUNT NOW HAS UNIQUE HISTORY
-local file = {}
-local file2 = "sprout-hop/history_" .. Players.LocalPlayer.UserId .. ".json"  -- Unique per account
-local currentServerFile = "sprout-hop/current_servers.json"  -- SHARED across all accounts
-local currentTeleportAttempt = 0
-local lastTeleportTime = 0
-
--- Track current server for all accounts
-local currentServers = {}
-
--- Load shared current server list
-pcall(function()
-    if isfile(currentServerFile) then
-        currentServers = HttpService:JSONDecode(readfile(currentServerFile))
-    end
-end)
-
--- Clean up old entries (servers older than 10 minutes)
-local function cleanCurrentServers()
-    local currentTime = os.time()
-    local cleaned = {}
-    for userId, data in pairs(currentServers) do
-        if currentTime - data.timestamp < 600 then -- 10 minutes
-            cleaned[userId] = data
-        end
-    end
-    currentServers = cleaned
-end
-
--- Update this account's current server
-local function updateCurrentServer()
-    cleanCurrentServers()
-    currentServers[tostring(Players.LocalPlayer.UserId)] = {
-        jobId = game.JobId,
-        timestamp = os.time()
-    }
-    pcall(function()
-        writefile(currentServerFile, HttpService:JSONEncode(currentServers))
-    end)
-end
-
--- Check if any other account is in a server
-local function isServerOccupiedByLAN(jobId)
-    cleanCurrentServers()
-    for userId, data in pairs(currentServers) do
-        -- Skip self
-        if userId ~= tostring(Players.LocalPlayer.UserId) then
-            if data.jobId == jobId then
-                print(string.format("[LAN] Server %s is occupied by account %s", jobId:sub(1, 8), userId))
-                return true
-            end
-        end
-    end
-    return false
-end
-
--- Create folder and load history
-pcall(function() 
-    if not isfolder("sprout-hop") then 
-        makefolder("sprout-hop") 
-    end 
-end)
-
-pcall(function() 
-    if isfile(file2) then 
-        file = HttpService:JSONDecode(readfile(file2)) 
-    end 
-end)
-
--- Save visited servers
-local function savehist()
-    local c = 0
-    for _ in pairs(file) do c = c + 1 end
-    if c >= 50 then file = {} end
-    pcall(function() 
-        writefile(file2, HttpService:JSONEncode(file)) 
-    end)
-end
+local MAX_RETRIES = 5  -- Number of times to retry hopping
+local RETRY_DELAY = 3  -- Seconds to wait between retries
 
 -- Field thumbnail mapping
 local fieldThumbnails = {
@@ -135,20 +55,11 @@ end
 
 -- Function to send webhook
 local function sendSproutWebhook(sprout)
-    print("[WEBHOOK] Starting webhook send process...")
-    
     task.spawn(function()
-        print("[WEBHOOK] Task spawned successfully")
-        
         local pos = sprout.Position
-        print(string.format("[WEBHOOK] Sprout position: %.2f, %.2f, %.2f", pos.X, pos.Y, pos.Z))
-        
         local fieldName = getFieldName(pos)
-        print("[WEBHOOK] Field name:", fieldName)
         
         local brickColor = sprout.BrickColor.Name
-        print("[WEBHOOK] BrickColor:", brickColor)
-        
         local sproutType, embedColor
         
         if brickColor == "Light grey metallic" then
@@ -174,8 +85,6 @@ local function sendSproutWebhook(sprout)
             embedColor = 0xFFD700
         end
         
-        print("[WEBHOOK] Sprout type:", sproutType, "Color:", embedColor)
-        
         local pollenText = "Unknown"
         pcall(function()
             local guiLabel = sprout:FindFirstChild("GuiPos", true):FindFirstChild("Gui", true):FindFirstChild("Frame", true):FindFirstChild("TextLabel", true)
@@ -183,19 +92,14 @@ local function sendSproutWebhook(sprout)
                 pollenText = guiLabel.Text
             end
         end)
-        print("[WEBHOOK] Pollen text:", pollenText)
         
         local playerCount = #Players:GetPlayers()
         local maxPlayers = Players.MaxPlayers
-        print(string.format("[WEBHOOK] Players: %d/%d", playerCount, maxPlayers))
         
         local jobId = game.JobId
         local placeId = game.PlaceId
         local webLink = string.format("https://www.roblox.com/games/start?placeId=%s&launchData=%%7B%%22gameId%%22%%3A%%22%s%%22%%7D", placeId, jobId)
         local directLink = string.format("roblox://placeID=%s&gameInstanceId=%s", placeId, jobId)
-        
-        print("[WEBHOOK] JobId:", jobId)
-        print("[WEBHOOK] PlaceId:", placeId)
         
         local emoji = "🌱"
         if sproutType == "Rare" then emoji = "🌟"
@@ -250,188 +154,94 @@ local function sendSproutWebhook(sprout)
             embed.thumbnail = { url = thumbnailUrl }
         end
         
-        print("[WEBHOOK] Embed created, preparing to send...")
-        
-        -- Check if request function exists
-        if not request then
-            warn("[WEBHOOK] ERROR: 'request' function not found! Your executor may not support it.")
-            warn("[WEBHOOK] Try: request, http_request, or syn.request")
-            return
-        end
-        
-        print("[WEBHOOK] Request function found:", type(request))
-        
-        local webhookBody = HttpService:JSONEncode({ embeds = {embed} })
-        print("[WEBHOOK] JSON body created, length:", #webhookBody)
-        
-        local success, result = pcall(function()
-            print("[WEBHOOK] Sending HTTP request...")
-            local response = request({
+        pcall(function()
+            request({
                 Url = WEBHOOK_URL,
                 Method = "POST",
                 Headers = {["Content-Type"] = "application/json"},
-                Body = webhookBody
+                Body = HttpService:JSONEncode({ embeds = {embed} })
             })
-            print("[WEBHOOK] Response received:", response)
-            return response
         end)
-        
-        if success then
-            print("[WEBHOOK] ✓ Webhook sent successfully!")
-            if result then
-                print("[WEBHOOK] Response status:", result.StatusCode or "unknown")
-                print("[WEBHOOK] Response body:", result.Body or "no body")
-            end
-        else
-            warn("[WEBHOOK] ✗ Failed to send webhook!")
-            warn("[WEBHOOK] Error:", tostring(result))
-        end
     end)
 end
 
--- Check if we can teleport (avoid "previous teleport in progress" error)
-local function canTeleport()
-    local timeSinceLastTeleport = tick() - lastTeleportTime
-    return timeSinceLastTeleport > TELEPORT_TIMEOUT
-end
-
--- Reset teleport state on failure
-TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
-    if player == Players.LocalPlayer then
-        warn(string.format("[HOP] Teleport failed: %s - %s", tostring(teleportResult), tostring(errorMessage)))
-        lastTeleportTime = 0 -- Allow immediate retry
-    end
-end)
-
--- Server hop function - prioritizes older servers, ignores new ones
+-- Simple server hop with retry system
 local function serverHop()
-    if not canTeleport() then
-        local remaining = TELEPORT_TIMEOUT - (tick() - lastTeleportTime)
-        print(string.format("[HOP] Waiting %.1f seconds for previous teleport to clear...", remaining))
-        return
-    end
+    local retryCount = 0
     
-    local success, servers = pcall(function()
-        return HttpService:JSONDecode(
-            game:HttpGet('https://games.roblox.com/v1/games/' .. PLACE_ID .. '/servers/Public?sortOrder=Desc&limit=100')
-        )
-    end)
-    
-    if not success or not servers or not servers.data then
-        warn("[HOP] Failed to fetch servers")
-        return
-    end
-    
-    print(string.format("[HOP] Fetched %d total servers from API", #servers.data))
-    
-    -- Filter and sort servers by age/uptime
-    local validServers = {}
-    local skippedReasons = {visited = 0, current = 0, full = 0, lan_occupied = 0}
-    local currentTime = os.time()
-    
-    for _, server in ipairs(servers.data) do
-        local jid = tostring(server.id)
-        local playerCount = tonumber(server.playing)
-        local maxPlayers = tonumber(server.maxPlayers)
+    while retryCount < MAX_RETRIES do
+        retryCount = retryCount + 1
+        print(string.format("[HOP] Attempt %d/%d", retryCount, MAX_RETRIES))
         
-        -- Track why servers are skipped
-        if file[jid] then
-            skippedReasons.visited = skippedReasons.visited + 1
-        elseif jid == game.JobId then
-            skippedReasons.current = skippedReasons.current + 1
-        elseif playerCount >= maxPlayers then
-            skippedReasons.full = skippedReasons.full + 1
-        elseif isServerOccupiedByLAN(jid) then
-            skippedReasons.lan_occupied = skippedReasons.lan_occupied + 1
-        else
-            -- Valid server - calculate priority score
-            local serverScore = playerCount -- Higher player count = likely older server
-            
-            table.insert(validServers, {
-                id = jid,
-                playing = playerCount,
-                maxPlayers = maxPlayers,
-                score = serverScore
-            })
-        end
-    end
-    
-    print(string.format("[HOP] Skipped: %d visited, %d current, %d full, %d LAN occupied", 
-        skippedReasons.visited, skippedReasons.current, skippedReasons.full, skippedReasons.lan_occupied))
-    print(string.format("[HOP] Found %d valid servers to check", #validServers))
-    
-    if #validServers == 0 then
-        print("[HOP] No unvisited servers available, clearing history...")
-        file = {} -- Clear history to allow revisiting servers
-        savehist()
-        return
-    end
-    
-    -- Sort by score (higher = older/better servers first)
-    table.sort(validServers, function(a, b)
-        return a.score > b.score
-    end)
-    
-    -- Try servers in order of priority (best to worst)
-    local attempted = 0
-    for i, server in ipairs(validServers) do
-        attempted = attempted + 1
-        print(string.format("[HOP] [%d/%d] Attempting server with %d/%d players (Score: %d)", 
-            i, #validServers, server.playing, server.maxPlayers, server.score))
-        
-        -- Mark as visited BEFORE teleporting
-        file[server.id] = os.time()
-        savehist()
-        
-        -- Set teleport time
-        lastTeleportTime = tick()
-        
-        -- Attempt teleport
-        print(string.format("[HOP] Teleporting to: %s", server.id))
-        local teleportSuccess = pcall(function()
-            TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, Players.LocalPlayer)
+        local success, servers = pcall(function()
+            return HttpService:JSONDecode(
+                game:HttpGet('https://games.roblox.com/v1/games/' .. PLACE_ID .. '/servers/Public?sortOrder=Asc&limit=100')
+            )
         end)
         
-        if teleportSuccess then
-            -- Wait for teleport to complete or timeout
-            return
+        if not success or not servers or not servers.data then
+            warn(string.format("[HOP] Failed to fetch servers (Attempt %d/%d)", retryCount, MAX_RETRIES))
+            task.wait(RETRY_DELAY)
+            continue
+        end
+        
+        print(string.format("[HOP] Found %d servers", #servers.data))
+        
+        -- Try to join any server that's not current and not full
+        local attempted = 0
+        for _, server in ipairs(servers.data) do
+            local jid = tostring(server.id)
+            local playerCount = tonumber(server.playing)
+            local maxPlayers = tonumber(server.maxPlayers)
+            
+            if jid ~= game.JobId and playerCount < maxPlayers then
+                attempted = attempted + 1
+                print(string.format("[HOP] Joining server with %d/%d players (JobId: %s)", playerCount, maxPlayers, jid:sub(1, 8)))
+                
+                local teleportSuccess, teleportError = pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PLACE_ID, jid, Players.LocalPlayer)
+                end)
+                
+                if teleportSuccess then
+                    print("[HOP] Teleport initiated successfully!")
+                    return true
+                else
+                    warn(string.format("[HOP] Teleport failed: %s", tostring(teleportError)))
+                    -- Try next server
+                end
+            end
+        end
+        
+        if attempted == 0 then
+            warn(string.format("[HOP] No available servers found (Attempt %d/%d)", retryCount, MAX_RETRIES))
         else
-            warn("[HOP] Teleport call failed, trying next server...")
-            lastTeleportTime = 0
+            warn(string.format("[HOP] All teleport attempts failed (Attempt %d/%d)", retryCount, MAX_RETRIES))
+        end
+        
+        if retryCount < MAX_RETRIES then
+            print(string.format("[HOP] Waiting %d seconds before retry...", RETRY_DELAY))
+            task.wait(RETRY_DELAY)
         end
     end
     
-    print("[HOP] Exhausted all options, will retry...")
+    warn("[HOP] Max retries reached, giving up...")
+    return false
 end
 
 -- Check for sprouts
 local function getspr()
     local s = Workspace:FindFirstChild("Sprouts")
-    if not s then 
-        print("[DEBUG] Sprouts folder not found in Workspace")
-        return 
-    end
+    if not s then return end
     
-    print("[DEBUG] Sprouts folder found, checking children...")
-    local childCount = 0
     for _, sprout in ipairs(s:GetChildren()) do
-        childCount = childCount + 1
-        print(string.format("[DEBUG] Child %d: %s (ClassName: %s)", childCount, sprout.Name, sprout.ClassName))
         if sprout:IsA("MeshPart") then
-            print("[DEBUG] Found valid MeshPart sprout!")
             return sprout
         end
     end
-    print(string.format("[DEBUG] Checked %d children, no MeshPart sprouts found", childCount))
 end
 
 -- Main logic
 print("[HOPPER] Checking current server...")
-print("[DEBUG] Workspace children:", Workspace:GetChildren())
-
--- Register this account's current server
-updateCurrentServer()
-print(string.format("[LAN] Registered in server: %s", game.JobId:sub(1, 8)))
 
 local sprout = getspr()
 
@@ -440,19 +250,24 @@ if sprout then
     sendSproutWebhook(sprout)
     task.wait(HOP_DELAY)
 else
-    print("[✗] No sprouts in this server")
+    print("[✗] No sprouts in this server, hopping...")
 end
 
--- Start hopping loop
-print("[HOP] Starting server hop cycle...")
-
--- Update current server periodically (every 30 seconds)
-task.spawn(function()
-    while task.wait(30) do
-        updateCurrentServer()
+-- Handle teleport failures
+TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+    if player == Players.LocalPlayer then
+        warn(string.format("[HOP] Teleport init failed: %s - %s", tostring(teleportResult), tostring(errorMessage)))
+        warn("[HOP] Retrying in 3 seconds...")
+        task.wait(3)
+        serverHop()
     end
 end)
 
-while task.wait(3) do
-    pcall(serverHop)
+-- Start hopping with retry system
+local hopSuccess = serverHop()
+
+if not hopSuccess then
+    warn("[HOP] Failed to hop after all retries. Waiting 10 seconds then trying again...")
+    task.wait(10)
+    serverHop()
 end
