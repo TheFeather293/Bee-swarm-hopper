@@ -4,19 +4,18 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local request = request or http_request or syn.request
-local WEBHOOK_URL = "https://discord.com/api/webhooks/1471934269462024217/0mVk1Hbl4Fi_1EtrFGPkwhE3fUyjMBcg7rwEwPpW1clj8l_Gs94C2h0seASRbspsTpIA"
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p3jtZCq69RV6st5q3bXHTDdgMe9NZeK_agQVMQT_QS0KTpxRZRQvqeGbotNTCMa"
 
 -- Configuration
 local PLACE_ID = game.PlaceId
 local HOP_DELAY = 1
-local TELEPORT_TIMEOUT = 10 -- Seconds before considering teleport failed
+local TELEPORT_TIMEOUT = 8 -- Seconds before trying next server
 
 -- Server hop state
 local file = {}
 local file2 = "sprout-hop/" .. Players.LocalPlayer.UserId .. ".json"
-local esheposidim = false
-local hop = false
-local teleportStartTime = 0
+local currentTeleportAttempt = 0
+local lastTeleportTime = 0
 
 -- Create folder and load history
 pcall(function() 
@@ -194,56 +193,27 @@ local function sendSproutWebhook(sprout)
     end)
 end
 
--- Teleport to server
-local function go(jid)
-    if hop then return false end
-    if file[jid] then return false end
-    
-    hop = true
-    esheposidim = true
-    teleportStartTime = tick()
-    file[jid] = os.time()
-    savehist()
-    
-    print(string.format("[HOP] Teleporting to server: %s", jid))
-    pcall(function() 
-        TeleportService:TeleportToPlaceInstance(PLACE_ID, jid, Players.LocalPlayer) 
-    end)
-    
-    return true
+-- Check if we can teleport (avoid "previous teleport in progress" error)
+local function canTeleport()
+    local timeSinceLastTeleport = tick() - lastTeleportTime
+    return timeSinceLastTeleport > TELEPORT_TIMEOUT
 end
 
--- Reset flags on teleport failure
+-- Reset teleport state on failure
 TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
     if player == Players.LocalPlayer then
         warn(string.format("[HOP] Teleport failed: %s - %s", tostring(teleportResult), tostring(errorMessage)))
-        hop = false
-        esheposidim = false
+        lastTeleportTime = 0 -- Allow immediate retry
     end
 end)
 
--- Teleport timeout monitor
-task.spawn(function()
-    while task.wait(1) do
-        if hop and teleportStartTime > 0 then
-            local elapsed = tick() - teleportStartTime
-            
-            if elapsed > TELEPORT_TIMEOUT then
-                warn(string.format("[HOP] Teleport timeout! (%d seconds elapsed)", math.floor(elapsed)))
-                warn("[HOP] Resetting and trying next server...")
-                
-                -- Reset flags
-                hop = false
-                esheposidim = false
-                teleportStartTime = 0
-            end
-        end
-    end
-end)
-
--- Server hop function
+-- Server hop function - tries ONE server at a time
 local function serverHop()
-    if esheposidim or hop then return end
+    if not canTeleport() then
+        local remaining = TELEPORT_TIMEOUT - (tick() - lastTeleportTime)
+        print(string.format("[HOP] Waiting %.1f seconds for previous teleport to clear...", remaining))
+        return
+    end
     
     local success, servers = pcall(function()
         return HttpService:JSONDecode(
@@ -256,7 +226,7 @@ local function serverHop()
         return
     end
     
-    -- Try each server
+    -- Try each server ONE AT A TIME
     for _, server in ipairs(servers.data) do
         local jid = tostring(server.id)
         
@@ -264,10 +234,27 @@ local function serverHop()
         if not file[jid] and jid ~= game.JobId then
             -- Skip full servers
             if tonumber(server.playing) < tonumber(server.maxPlayers) then
-                print(string.format("[HOP] Found server with %d/%d players", server.playing, server.maxPlayers))
+                print(string.format("[HOP] Attempting server with %d/%d players", server.playing, server.maxPlayers))
                 
-                if go(jid) then
+                -- Mark as visited BEFORE teleporting
+                file[jid] = os.time()
+                savehist()
+                
+                -- Set teleport time
+                lastTeleportTime = tick()
+                
+                -- Attempt teleport
+                print(string.format("[HOP] Teleporting to: %s", jid))
+                local teleportSuccess = pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PLACE_ID, jid, Players.LocalPlayer)
+                end)
+                
+                if teleportSuccess then
+                    -- Wait for teleport to complete or timeout
                     return
+                else
+                    warn("[HOP] Teleport call failed, trying next server...")
+                    lastTeleportTime = 0
                 end
             else
                 print(string.format("[HOP] Skipping full server (%d/%d)", server.playing, server.maxPlayers))
@@ -275,7 +262,7 @@ local function serverHop()
         end
     end
     
-    print("[HOP] No new servers found in this batch")
+    print("[HOP] No new servers found, will retry...")
 end
 
 -- Check for sprouts
@@ -306,7 +293,5 @@ end
 -- Start hopping loop
 print("[HOP] Starting server hop cycle...")
 while task.wait(3) do
-    if not esheposidim and not hop then
-        pcall(serverHop)
-    end
+    pcall(serverHop)
 end
