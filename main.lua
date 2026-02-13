@@ -8,7 +8,24 @@ local WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p
 
 -- Configuration
 local PLACE_ID = game.PlaceId
-local HOP_DELAY = 0.5
+local HOP_DELAY = 1
+
+-- Server hop state
+local AllIDs = {}
+local foundAnything = ""
+local actualHour = os.date("!*t").hour
+local isTeleporting = false
+
+-- Load visited servers
+local File = pcall(function()
+    AllIDs = HttpService:JSONDecode(readfile("server-hop-temp.json"))
+end)
+if not File then
+    table.insert(AllIDs, actualHour)
+    pcall(function()
+        writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
+    end)
+end
 
 -- Field thumbnail mapping
 local fieldThumbnails = {
@@ -49,77 +66,6 @@ local function getFieldName(pos)
     end
     
     return "Unknown Field"
-end
-
--- Function to server hop with retry
-local function serverHop()
-    print("[HOP] Searching for new server...")
-    
-    local maxAttempts = 3
-    local attempt = 1
-    
-    while attempt <= maxAttempts do
-        local success, err = pcall(function()
-            local serversUrl = string.format(
-                "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
-                PLACE_ID
-            )
-            
-            local serversJson = game:HttpGet(serversUrl)
-            local servers = HttpService:JSONDecode(serversJson)
-            
-            if servers and servers.data then
-                local validServers = {}
-                
-                for _, server in pairs(servers.data) do
-                    if server.id ~= game.JobId and server.playing < server.maxPlayers then
-                        table.insert(validServers, server)
-                    end
-                end
-                
-                if #validServers > 0 then
-                    local targetServer = validServers[math.random(1, #validServers)]
-                    print(string.format("[HOP] Found server with %d/%d players", targetServer.playing, targetServer.maxPlayers))
-                    print("[HOP] Teleporting now...")
-                    
-                    -- Use teleport async for better reliability
-                    local teleportSuccess = pcall(function()
-                        TeleportService:TeleportToPlaceInstance(
-                            PLACE_ID,
-                            targetServer.id,
-                            Players.LocalPlayer
-                        )
-                    end)
-                    
-                    if teleportSuccess then
-                        -- Wait for teleport to complete
-                        task.wait(10)
-                        return
-                    else
-                        warn("[HOP] Teleport failed, retrying...")
-                    end
-                else
-                    print("[HOP] No valid servers found, using fallback...")
-                    TeleportService:Teleport(PLACE_ID, Players.LocalPlayer)
-                    task.wait(10)
-                    return
-                end
-            end
-        end)
-        
-        if not success then
-            warn(string.format("[HOP] Attempt %d failed: %s", attempt, tostring(err)))
-            attempt = attempt + 1
-            task.wait(1)
-        else
-            return
-        end
-    end
-    
-    -- Final fallback
-    print("[HOP] All attempts failed, using simple teleport...")
-    TeleportService:Teleport(PLACE_ID, Players.LocalPlayer)
-    task.wait(10)
 end
 
 -- Function to send webhook
@@ -234,8 +180,78 @@ local function sendSproutWebhook(sprout)
     end)
 end
 
+-- Server hop function
+local function TPReturner()
+    -- Check if already teleporting
+    if isTeleporting then
+        print("[HOP] Teleport already in progress, skipping...")
+        return
+    end
+    
+    local Site
+    if foundAnything == "" then
+        Site = HttpService:JSONDecode(game:HttpGet('https://games.roblox.com/v1/games/' .. PLACE_ID .. '/servers/Public?sortOrder=Asc&limit=100'))
+    else
+        Site = HttpService:JSONDecode(game:HttpGet('https://games.roblox.com/v1/games/' .. PLACE_ID .. '/servers/Public?sortOrder=Asc&limit=100&cursor=' .. foundAnything))
+    end
+    
+    local ID = ""
+    if Site.nextPageCursor and Site.nextPageCursor ~= "null" and Site.nextPageCursor ~= nil then
+        foundAnything = Site.nextPageCursor
+    end
+    
+    local num = 0
+    for i, v in pairs(Site.data) do
+        local Possible = true
+        ID = tostring(v.id)
+        
+        if tonumber(v.maxPlayers) > tonumber(v.playing) then
+            for _, Existing in pairs(AllIDs) do
+                if num ~= 0 then
+                    if ID == tostring(Existing) then
+                        Possible = false
+                    end
+                else
+                    if tonumber(actualHour) ~= tonumber(Existing) then
+                        pcall(function()
+                            delfile("server-hop-temp.json")
+                            AllIDs = {}
+                            table.insert(AllIDs, actualHour)
+                        end)
+                    end
+                end
+                num = num + 1
+            end
+            
+            if Possible == true and not isTeleporting then
+                table.insert(AllIDs, ID)
+                
+                pcall(function()
+                    writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
+                end)
+                
+                print(string.format("[HOP] Teleporting to server with %d/%d players", v.playing, v.maxPlayers))
+                
+                isTeleporting = true
+                
+                local success = pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PLACE_ID, ID, Players.LocalPlayer)
+                end)
+                
+                if success then
+                    -- Wait for teleport to complete
+                    repeat task.wait() until false
+                else
+                    warn("[HOP] Teleport failed, trying next server...")
+                    isTeleporting = false
+                end
+            end
+        end
+    end
+end
+
 -- Main logic
-print("[HOPPER] Checking server...")
+print("[HOPPER] Checking current server...")
 
 local sproutsFolder = Workspace:FindFirstChild("Sprouts")
 local foundSprout = false
@@ -253,8 +269,20 @@ if sproutsFolder then
 end
 
 if not foundSprout then
-    print("[✗] No sprouts")
+    print("[✗] No sprouts in this server")
 end
 
--- Hop to next server
-serverHop()
+-- Start hopping
+print("[HOP] Starting server hop cycle...")
+while task.wait(1) do
+    if not isTeleporting then
+        pcall(function()
+            TPReturner()
+            if foundAnything ~= "" then
+                TPReturner()
+            end
+        end)
+    else
+        print("[HOP] Waiting for current teleport to complete...")
+    end
+end
