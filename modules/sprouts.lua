@@ -1,5 +1,5 @@
--- modules/sprout.lua
-local Webhook = require(game.ServerScriptService.webhook)
+-- modules/sprouts.lua
+local Webhook = require(script.Parent.Parent.webhook)
 
 local Sprout = {}
 Sprout.sentSprouts = {}
