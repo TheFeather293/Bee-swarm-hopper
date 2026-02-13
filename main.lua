@@ -167,6 +167,20 @@ end
 -- Simple server hop with infinite retry system
 local function serverHop()
     while true do  -- Keep trying forever
+        -- FIRST: Check for sprout in current server
+        print("[HOPPER] Checking current server for sprouts...")
+        local sprout = getspr()
+        
+        if sprout then
+            print("[✓] Sprout found! Sending webhook...")
+            sendSproutWebhook(sprout)
+            task.wait(HOP_DELAY)
+            print("[HOPPER] Webhook sent, now hopping to next server...")
+        else
+            print("[✗] No sprouts in this server")
+        end
+        
+        -- THEN: Server hop to next server
         print("[HOP] Attempting to find a new server...")
         
         local success, servers = pcall(function()
@@ -227,14 +241,6 @@ end
 -- Main logic
 print("[HOPPER] Starting sprout hopper...")
 
--- Check current server first
-local sprout = getspr()
-if sprout then
-    print("[✓] Sprout found in current server! Sending webhook...")
-    sendSproutWebhook(sprout)
-    task.wait(HOP_DELAY)
-end
-
 -- Handle teleport failures and retry
 TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
     if player == Players.LocalPlayer then
@@ -243,6 +249,6 @@ TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, erro
     end
 end)
 
--- Start infinite hopping loop - NEVER STOPS
-print("[HOP] Starting infinite server hop loop...")
+-- Start infinite hopping loop - checks sprout THEN hops EVERY time
+print("[HOP] Starting infinite check-and-hop loop...")
 serverHop()  -- This function never returns - it loops forever
