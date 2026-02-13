@@ -10,7 +10,7 @@ local WEBHOOK_URL = "https://discord.com/api/webhooks/1471934269462024217/0mVk1H
 local PLACE_ID = game.PlaceId
 local HOP_DELAY = 1
 local TELEPORT_TIMEOUT = 8 -- Seconds before trying next server
-local MIN_PLAYERS_TO_JOIN = 1 -- Minimum players (1 = accept any non-empty server)
+local MIN_PLAYERS_TO_JOIN = 0 -- Accept ANY server, even empty (changed from 1)
 local PREFER_POPULATED_SERVERS = true -- Prioritize servers with more players (older servers)
 
 -- Server hop state - EACH ACCOUNT NOW HAS UNIQUE HISTORY
@@ -372,56 +372,32 @@ local function serverHop()
         return a.score > b.score
     end)
     
-    -- Try servers in order of priority
+    -- Try servers in order of priority (best to worst)
     local attempted = 0
     for i, server in ipairs(validServers) do
-        -- Apply MIN_PLAYERS filter but with fallback
-        if server.playing >= MIN_PLAYERS_TO_JOIN or (i > 10 and server.playing > 0) then
-            attempted = attempted + 1
-            print(string.format("[HOP] [%d/%d] Attempting server with %d/%d players (Score: %d)", 
-                i, #validServers, server.playing, server.maxPlayers, server.score))
-            
-            -- Mark as visited BEFORE teleporting
-            file[server.id] = os.time()
-            savehist()
-            
-            -- Set teleport time
-            lastTeleportTime = tick()
-            
-            -- Attempt teleport
-            print(string.format("[HOP] Teleporting to: %s", server.id))
-            local teleportSuccess = pcall(function()
-                TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, Players.LocalPlayer)
-            end)
-            
-            if teleportSuccess then
-                -- Wait for teleport to complete or timeout
-                return
-            else
-                warn("[HOP] Teleport call failed, trying next server...")
-                lastTeleportTime = 0
-            end
+        attempted = attempted + 1
+        print(string.format("[HOP] [%d/%d] Attempting server with %d/%d players (Score: %d)", 
+            i, #validServers, server.playing, server.maxPlayers, server.score))
+        
+        -- Mark as visited BEFORE teleporting
+        file[server.id] = os.time()
+        savehist()
+        
+        -- Set teleport time
+        lastTeleportTime = tick()
+        
+        -- Attempt teleport
+        print(string.format("[HOP] Teleporting to: %s", server.id))
+        local teleportSuccess = pcall(function()
+            TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, Players.LocalPlayer)
+        end)
+        
+        if teleportSuccess then
+            -- Wait for teleport to complete or timeout
+            return
         else
-            print(string.format("[HOP] Skipping low-population server (%d players)", server.playing))
-        end
-    end
-    
-    if attempted == 0 then
-        print("[HOP] All servers filtered out by MIN_PLAYERS setting, lowering standards...")
-        -- Try ANY server as last resort
-        for i, server in ipairs(validServers) do
-            if server.playing > 0 then
-                print(string.format("[HOP] FALLBACK: Trying server with %d players", server.playing))
-                
-                file[server.id] = os.time()
-                savehist()
-                lastTeleportTime = tick()
-                
-                pcall(function()
-                    TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, Players.LocalPlayer)
-                end)
-                return
-            end
+            warn("[HOP] Teleport call failed, trying next server...")
+            lastTeleportTime = 0
         end
     end
     
