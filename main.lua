@@ -1,4 +1,6 @@
-local Sprout = require(script.modules.sprout)
+local ServerScriptService = game:GetService("ServerScriptService")
+local sproutsModule = ServerScriptService:WaitForChild("modules"):WaitForChild("sprouts")
+local Sprout = require(sproutsModule)
 local Workspace = game:GetService("Workspace")
 
 -- Wait for Sprouts folder
