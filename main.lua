@@ -4,12 +4,14 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local request = request or http_request or syn.request
-local WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p3jtZCq69RV6st5q3bXHTDdgMe9NZeK_agQVMQT_QS0KTpxRZRQvqeGbotNTCMa"
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1471934269462024217/0mVk1Hbl4Fi_1EtrFGPkwhE3fUyjMBcg7rwEwPpW1clj8l_Gs94C2h0seASRbspsTpIA"
 
 -- Configuration
 local PLACE_ID = game.PlaceId
 local HOP_DELAY = 1
 local TELEPORT_TIMEOUT = 8 -- Seconds before trying next server
+local MIN_PLAYERS_TO_JOIN = 2 -- Ignore servers with fewer players (likely new/empty)
+local PREFER_POPULATED_SERVERS = true -- Prioritize servers with more players (older servers)
 
 -- Server hop state - EACH ACCOUNT NOW HAS UNIQUE HISTORY
 local file = {}
@@ -251,7 +253,7 @@ TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, erro
     end
 end)
 
--- Server hop function - tries ONE server at a time
+-- Server hop function - prioritizes older servers, ignores new ones
 local function serverHop()
     if not canTeleport() then
         local remaining = TELEPORT_TIMEOUT - (tick() - lastTeleportTime)
@@ -261,7 +263,7 @@ local function serverHop()
     
     local success, servers = pcall(function()
         return HttpService:JSONDecode(
-            game:HttpGet('https://games.roblox.com/v1/games/' .. PLACE_ID .. '/servers/Public?sortOrder=Asc&limit=100')
+            game:HttpGet('https://games.roblox.com/v1/games/' .. PLACE_ID .. '/servers/Public?sortOrder=Desc&limit=100')
         )
     end)
     
@@ -270,43 +272,70 @@ local function serverHop()
         return
     end
     
-    -- Try each server ONE AT A TIME
+    -- Filter and sort servers by age/uptime
+    local validServers = {}
+    local currentTime = os.time()
+    
     for _, server in ipairs(servers.data) do
         local jid = tostring(server.id)
+        local playerCount = tonumber(server.playing)
+        local maxPlayers = tonumber(server.maxPlayers)
         
-        -- Skip if already visited or current server
-        if not file[jid] and jid ~= game.JobId then
-            -- Skip full servers
-            if tonumber(server.playing) < tonumber(server.maxPlayers) then
-                print(string.format("[HOP] Attempting server with %d/%d players", server.playing, server.maxPlayers))
-                
-                -- Mark as visited BEFORE teleporting
-                file[jid] = os.time()
-                savehist()
-                
-                -- Set teleport time
-                lastTeleportTime = tick()
-                
-                -- Attempt teleport
-                print(string.format("[HOP] Teleporting to: %s", jid))
-                local teleportSuccess = pcall(function()
-                    TeleportService:TeleportToPlaceInstance(PLACE_ID, jid, Players.LocalPlayer)
-                end)
-                
-                if teleportSuccess then
-                    -- Wait for teleport to complete or timeout
-                    return
-                else
-                    warn("[HOP] Teleport call failed, trying next server...")
-                    lastTeleportTime = 0
-                end
-            else
-                print(string.format("[HOP] Skipping full server (%d/%d)", server.playing, server.maxPlayers))
-            end
+        -- Skip if already visited, current server, or full
+        if not file[jid] and jid ~= game.JobId and playerCount < maxPlayers then
+            -- Calculate server age (servers with more players are usually older)
+            -- Also check if server has been up for a while
+            local serverScore = playerCount -- Higher player count = likely older server
+            
+            table.insert(validServers, {
+                id = jid,
+                playing = playerCount,
+                maxPlayers = maxPlayers,
+                score = serverScore
+            })
         end
     end
     
-    print("[HOP] No new servers found, will retry...")
+    -- Sort by score (higher = older/better servers first)
+    table.sort(validServers, function(a, b)
+        return a.score > b.score
+    end)
+    
+    print(string.format("[HOP] Found %d valid servers to check", #validServers))
+    
+    -- Try servers in order of priority
+    for i, server in ipairs(validServers) do
+        -- Skip very new servers based on MIN_PLAYERS_TO_JOIN setting
+        if server.playing >= MIN_PLAYERS_TO_JOIN then
+            print(string.format("[HOP] [%d/%d] Attempting server with %d/%d players (Score: %d)", 
+                i, #validServers, server.playing, server.maxPlayers, server.score))
+            
+            -- Mark as visited BEFORE teleporting
+            file[server.id] = os.time()
+            savehist()
+            
+            -- Set teleport time
+            lastTeleportTime = tick()
+            
+            -- Attempt teleport
+            print(string.format("[HOP] Teleporting to: %s", server.id))
+            local teleportSuccess = pcall(function()
+                TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, Players.LocalPlayer)
+            end)
+            
+            if teleportSuccess then
+                -- Wait for teleport to complete or timeout
+                return
+            else
+                warn("[HOP] Teleport call failed, trying next server...")
+                lastTeleportTime = 0
+            end
+        else
+            print(string.format("[HOP] Skipping new server with only %d players", server.playing))
+        end
+    end
+    
+    print("[HOP] No suitable servers found, will retry...")
 end
 
 -- Check for sprouts
