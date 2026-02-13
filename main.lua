@@ -1,4 +1,4 @@
-local Sprout = require(script.modules.sprouts)
+local Sprout = require(script.modules.sprout)
 local Workspace = game:GetService("Workspace")
 
 -- Wait for Sprouts folder

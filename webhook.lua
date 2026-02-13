@@ -51,23 +51,16 @@ function Webhook.sendSproutWebhook(sprout, sentSprouts)
     local directLink = string.format("roblox://placeID=%s&gameInstanceId=%s", placeId, jobId)
 
     -- Build embed
-    local fields = {
-        {name="📍 Position", value=string.format("```%.2f, %.2f, %.2f```", pos.X,pos.Y,pos.Z), inline=false},
-        {name="🌸 Pollen Left", value=string.format("```%s```", pollenText), inline=true},
-        {name="🌾 Field", value=string.format("```%s```", fieldName), inline=true},
-        {name="😳 Players", value=string.format("```%d/%d```", playerCount, maxPlayers), inline=false},
-        {name="🔗 Join Server", value=string.format("**[Click Here to Join](%s)**\n```%s```", webLink,directLink), inline=false}
-    }
-    
-    -- Add BrickColor field if unknown sprout
-    if sproutType == "Unknown" then
-        table.insert(fields, {name="🎨 BrickColor", value=string.format("```%s```", brickColor), inline=false})
-    end
-    
     local embed = {
         title = string.format("%s %s Sprout Detected!", emoji, sproutType),
         color = embedColor,
-        fields = fields,
+        fields = {
+            {name="📍 Position", value=string.format("```%.2f, %.2f, %.2f```", pos.X,pos.Y,pos.Z), inline=false},
+            {name="🌸 Pollen Left", value=string.format("```%s```", pollenText), inline=true},
+            {name="🌾 Field", value=string.format("```%s```", fieldName), inline=true},
+            {name="😳 Players", value=string.format("```%d/%d```", playerCount, maxPlayers), inline=false},
+            {name="🔗 Join Server", value=string.format("**[Click Here to Join](%s)**\n```%s```", webLink,directLink), inline=false}
+        },
         footer = {text="Sprout Tracker • "..os.date("%I:%M %p")},
         timestamp = os.date("!%Y-%m-%dT%H:%M:%S")
     }
