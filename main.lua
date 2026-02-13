@@ -180,12 +180,54 @@ local function sendSproutWebhook(sprout)
     end)
 end
 
+-- Server hop function with teleport failure handling
+local function attemptTeleport(serverId, playerCount, maxPlayers)
+    print(string.format("[HOP] Attempting to join server with %d/%d players...", playerCount, maxPlayers))
+    
+    isTeleporting = true
+    
+    -- Listen for teleport failures
+    local failConnection
+    failConnection = TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+        warn(string.format("[HOP] Teleport failed: %s - %s", tostring(teleportResult), tostring(errorMessage)))
+        
+        -- Check if server is full
+        if errorMessage and (errorMessage:find("full") or errorMessage:find("Full")) then
+            print("[HOP] Server is full, marking as visited and trying next server...")
+            table.insert(AllIDs, serverId)
+            pcall(function()
+                writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
+            end)
+        end
+        
+        isTeleporting = false
+        failConnection:Disconnect()
+    end)
+    
+    -- Attempt teleport
+    local success = pcall(function()
+        TeleportService:TeleportToPlaceInstance(PLACE_ID, serverId, Players.LocalPlayer)
+    end)
+    
+    if not success then
+        warn("[HOP] Teleport call failed")
+        isTeleporting = false
+        if failConnection then
+            failConnection:Disconnect()
+        end
+        return false
+    end
+    
+    -- If successful, wait indefinitely for teleport to complete
+    task.wait(2)
+    return true
+end
+
 -- Server hop function
 local function TPReturner()
     -- Check if already teleporting
     if isTeleporting then
-        print("[HOP] Teleport already in progress, skipping...")
-        return
+        return false
     end
     
     local Site
@@ -205,7 +247,13 @@ local function TPReturner()
         local Possible = true
         ID = tostring(v.id)
         
-        if tonumber(v.maxPlayers) > tonumber(v.playing) then
+        -- Skip full servers immediately
+        if tonumber(v.playing) >= tonumber(v.maxPlayers) then
+            print(string.format("[HOP] Skipping full server (%d/%d)", v.playing, v.maxPlayers))
+            Possible = false
+        end
+        
+        if Possible then
             for _, Existing in pairs(AllIDs) do
                 if num ~= 0 then
                     if ID == tostring(Existing) then
@@ -222,32 +270,28 @@ local function TPReturner()
                 end
                 num = num + 1
             end
+        end
+        
+        if Possible and not isTeleporting then
+            table.insert(AllIDs, ID)
             
-            if Possible == true and not isTeleporting then
-                table.insert(AllIDs, ID)
-                
-                pcall(function()
-                    writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
-                end)
-                
-                print(string.format("[HOP] Teleporting to server with %d/%d players", v.playing, v.maxPlayers))
-                
-                isTeleporting = true
-                
-                local success = pcall(function()
-                    TeleportService:TeleportToPlaceInstance(PLACE_ID, ID, Players.LocalPlayer)
-                end)
-                
-                if success then
-                    -- Wait for teleport to complete
-                    repeat task.wait() until false
-                else
-                    warn("[HOP] Teleport failed, trying next server...")
-                    isTeleporting = false
-                end
+            pcall(function()
+                writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
+            end)
+            
+            -- Attempt teleport
+            local teleported = attemptTeleport(ID, v.playing, v.maxPlayers)
+            
+            if teleported then
+                return true
             end
+            
+            -- If teleport failed, continue to next server
+            task.wait(1)
         end
     end
+    
+    return false
 end
 
 -- Main logic
@@ -274,15 +318,17 @@ end
 
 -- Start hopping
 print("[HOP] Starting server hop cycle...")
-while task.wait(1) do
+while task.wait(2) do
     if not isTeleporting then
-        pcall(function()
-            TPReturner()
-            if foundAnything ~= "" then
+        local success = pcall(function()
+            local hopped = TPReturner()
+            if not hopped and foundAnything ~= "" then
                 TPReturner()
             end
         end)
-    else
-        print("[HOP] Waiting for current teleport to complete...")
+        
+        if not success then
+            warn("[HOP] Error in hop cycle, retrying...")
+        end
     end
 end
