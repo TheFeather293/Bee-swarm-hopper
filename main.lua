@@ -2,8 +2,13 @@ repeat task.wait() until game:IsLoaded()
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
 local request = request or http_request or syn.request
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p3jtZCq69RV6st5q3bXHTDdgMe9NZeK_agQVMQT_QS0KTpxRZRQvqeGbotNTCMa"
+
+-- Configuration
+local PLACE_ID = game.PlaceId
+local HOP_DELAY = 2 -- Seconds to wait before hopping (gives time for webhook to send)
 
 -- Field thumbnail mapping (using exact field names from FlowerZones)
 local fieldThumbnails = {
@@ -26,9 +31,6 @@ local fieldThumbnails = {
     ["Coconut Field"] = "https://static.wikia.nocookie.net/bee-swarm-simulator/images/6/62/Hivesticker_coconut_field_stamp.png"
 }
 
--- Track sent sprouts to avoid duplicates
-local sentSprouts = {}
-
 -- Function to get field name from position
 local function getFieldName(pos)
     local FlowerZones = Workspace:FindFirstChild("FlowerZones")
@@ -39,7 +41,6 @@ local function getFieldName(pos)
             local zonePos = zone.Position
             local zoneSize = zone.Size
             
-            -- Check if sprout position is within zone bounds
             if math.abs(pos.X - zonePos.X) <= zoneSize.X / 2 and
                math.abs(pos.Z - zonePos.Z) <= zoneSize.Z / 2 then
                 return zone.Name
@@ -50,48 +51,82 @@ local function getFieldName(pos)
     return "Unknown Field"
 end
 
+-- Function to server hop
+local function serverHop()
+    print("[HOP] Searching for new server...")
+    
+    local success, result = pcall(function()
+        local servers = HttpService:JSONDecode(game:HttpGet(
+            "https://games.roblox.com/v1/games/" .. PLACE_ID .. "/servers/Public?sortOrder=Asc&limit=100"
+        ))
+        
+        if servers and servers.data then
+            -- Filter out current server and full servers
+            local availableServers = {}
+            for _, server in pairs(servers.data) do
+                if server.id ~= game.JobId and server.playing < server.maxPlayers then
+                    table.insert(availableServers, server)
+                end
+            end
+            
+            if #availableServers > 0 then
+                -- Pick random server
+                local randomServer = availableServers[math.random(1, #availableServers)]
+                print(string.format("[HOP] Found server with %d/%d players", randomServer.playing, randomServer.maxPlayers))
+                
+                TeleportService:TeleportToPlaceInstance(PLACE_ID, randomServer.id, Players.LocalPlayer)
+            else
+                print("[HOP] No available servers, trying again...")
+                task.wait(2)
+                TeleportService:Teleport(PLACE_ID, Players.LocalPlayer)
+            end
+        end
+    end)
+    
+    if not success then
+        warn("[HOP] Failed to hop:", result)
+        task.wait(2)
+        TeleportService:Teleport(PLACE_ID, Players.LocalPlayer)
+    end
+end
+
 -- Function to send webhook for a sprout
 local function sendSproutWebhook(sprout)
-    -- Check if already sent
-    if sentSprouts[sprout] then return end
-    sentSprouts[sprout] = true
-    
-    -- Sprout info
     local pos = sprout.Position
     local sproutName = sprout.Name
     local fieldName = getFieldName(pos)
     
-    -- Rare / Normal / Epic / Gummy / Moon detection
+    -- Rare / Normal / Epic / Gummy / Moon / Legendary detection
     local brickColor = sprout.BrickColor.Name
     local sproutType
     local embedColor
     if brickColor == "Light grey metallic" then
         sproutType = "Rare"
-        embedColor = 0x5865F2 -- Discord Blurple
+        embedColor = 0x5865F2
     elseif brickColor == "Sage green" then
         sproutType = "Normal"
-        embedColor = 0x57F287 -- Green
+        embedColor = 0x57F287
     elseif brickColor == "CGA brown" then
         sproutType = "Epic"
-        embedColor = 0xFEE75C -- Gold
+        embedColor = 0xFEE75C
     elseif brickColor == "Alder" then
         sproutType = "Gummy"
-        embedColor = 0xE91E63 -- Pink
+        embedColor = 0xE91E63
     elseif brickColor == "Medium blue" then
         sproutType = "Moon"
-        embedColor = 0x00BFFF -- Deep Sky Blue
+        embedColor = 0x00BFFF
     elseif brickColor == "Electric blue" then
         sproutType = "Legendary"
-        embedColor = 0xFF00FF -- Magenta
+        embedColor = 0xFF00FF
     else
-        sproutType = "Unknown"
-        embedColor = 0x99AAB5 -- Gray
+        sproutType = "Supreme"
+        embedColor = 0xFFD700
     end
     
     -- Grab pollen left from GUI
     local pollenText = "Unknown"
     local success, guiLabel = pcall(function()
-        return sprout:WaitForChild("GuiPos", 3):WaitForChild("Gui"):WaitForChild("Frame"):WaitForChild("TextLabel")
+        return sprout:WaitForChild("GuiPos", 1):WaitForChild("Gui"):WaitForChild("Frame"):WaitForChild("TextLabel")
     end)
     if success and guiLabel then
         pollenText = guiLabel.Text
@@ -119,46 +154,55 @@ local function sendSproutWebhook(sprout)
         emoji = "🌙"
     elseif sproutType == "Legendary" then
         emoji = "⚡"
+    elseif sproutType == "Supreme" then
+        emoji = "👑"
     else
         emoji = "🌱"
     end
     
-    -- Get field thumbnail based on detected field
     local thumbnailUrl = fieldThumbnails[fieldName]
     
-    -- Debug: print field name to check matching
-    print("Sprout Name:", sproutName)
-    print("Field Name:", fieldName)
-    print("BrickColor:", brickColor)
-    print("Thumbnail URL:", thumbnailUrl or "Not found")
-    
-    -- Build description with inline format
-    local description = string.format(
-        "**Position:** `%.2f, %.2f, %.2f` **Pollen Left:** `%s`\n**Field:** `%s` **Players:** `%d/%d`\n**Join Server:** [Click Here](%s) `%s`",
-        pos.X, pos.Y, pos.Z,
-        pollenText,
-        fieldName,
-        playerCount, maxPlayers,
-        webLink,
-        directLink
-    )
+    print(string.format("[SPROUT FOUND] %s %s in %s", emoji, sproutType, fieldName))
     
     -- Build embed
     local embed = {
         title = string.format("%s %s Sprout Detected!", emoji, sproutType),
-        description = description,
         color = embedColor,
+        fields = {
+            {
+                name = "📍 Position",
+                value = string.format("```%.2f, %.2f, %.2f```", pos.X, pos.Y, pos.Z),
+                inline = true
+            },
+            {
+                name = "🌸 Pollen Left",
+                value = string.format("```%s```", pollenText),
+                inline = true
+            },
+            {
+                name = "🌾 Field",
+                value = string.format("```%s```", fieldName),
+                inline = true
+            },
+            {
+                name = "😳 Players",
+                value = string.format("```%d/%d```", playerCount, maxPlayers),
+                inline = true
+            },
+            {
+                name = "🔗 Join Server",
+                value = string.format("**[Click Here to Join](%s)**\n```%s```", webLink, directLink),
+                inline = false
+            }
+        },
         footer = {
             text = "Sprout Tracker • " .. os.date("%I:%M %p")
         },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%S")
     }
     
-    -- Only add thumbnail if URL exists
     if thumbnailUrl then
-        embed.thumbnail = {
-            url = thumbnailUrl
-        }
+        embed.thumbnail = { url = thumbnailUrl }
     end
     
     -- Send webhook
@@ -172,29 +216,36 @@ local function sendSproutWebhook(sprout)
     })
 end
 
--- Wait for Sprouts folder
-local sproutsFolder = Workspace:WaitForChild("Sprouts")
+-- Main logic
+print("=================================")
+print("  Sprout Server Hopper")
+print("  Checking current server...")
+print("=================================")
 
--- Check for existing sprouts
-for _, sprout in pairs(sproutsFolder:GetChildren()) do
-    if sprout:IsA("MeshPart") then
-        task.spawn(function()
+local sproutsFolder = Workspace:WaitForChild("Sprouts", 5)
+
+if sproutsFolder then
+    local foundSprout = false
+    
+    -- Check for existing sprouts
+    for _, sprout in pairs(sproutsFolder:GetChildren()) do
+        if sprout:IsA("MeshPart") then
+            foundSprout = true
+            print("[✓] Sprout found! Sending webhook...")
             sendSproutWebhook(sprout)
-        end)
+            break -- Only send webhook for first sprout found
+        end
     end
+    
+    if foundSprout then
+        print(string.format("[HOP] Webhook sent! Hopping in %d seconds...", HOP_DELAY))
+        task.wait(HOP_DELAY)
+    else
+        print("[✗] No sprouts in this server")
+    end
+else
+    print("[✗] Sprouts folder not found")
 end
 
--- Listen for new sprouts
-sproutsFolder.ChildAdded:Connect(function(sprout)
-    if sprout:IsA("MeshPart") then
-        task.wait(0.5) -- Wait a bit for GUI to load
-        sendSproutWebhook(sprout)
-    end
-end)
-
--- Clean up tracking when sprout is removed
-sproutsFolder.ChildRemoved:Connect(function(sprout)
-    sentSprouts[sprout] = nil
-end)
-
-print("Sprout tracker initialized! Monitoring all sprouts...")
+-- Hop to next server
+serverHop()
