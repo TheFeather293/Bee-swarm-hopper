@@ -16,8 +16,58 @@ local PREFER_POPULATED_SERVERS = true -- Prioritize servers with more players (o
 -- Server hop state - EACH ACCOUNT NOW HAS UNIQUE HISTORY
 local file = {}
 local file2 = "sprout-hop/history_" .. Players.LocalPlayer.UserId .. ".json"  -- Unique per account
+local currentServerFile = "sprout-hop/current_servers.json"  -- SHARED across all accounts
 local currentTeleportAttempt = 0
 local lastTeleportTime = 0
+
+-- Track current server for all accounts
+local currentServers = {}
+
+-- Load shared current server list
+pcall(function()
+    if isfile(currentServerFile) then
+        currentServers = HttpService:JSONDecode(readfile(currentServerFile))
+    end
+end)
+
+-- Clean up old entries (servers older than 10 minutes)
+local function cleanCurrentServers()
+    local currentTime = os.time()
+    local cleaned = {}
+    for userId, data in pairs(currentServers) do
+        if currentTime - data.timestamp < 600 then -- 10 minutes
+            cleaned[userId] = data
+        end
+    end
+    currentServers = cleaned
+end
+
+-- Update this account's current server
+local function updateCurrentServer()
+    cleanCurrentServers()
+    currentServers[tostring(Players.LocalPlayer.UserId)] = {
+        jobId = game.JobId,
+        timestamp = os.time()
+    }
+    pcall(function()
+        writefile(currentServerFile, HttpService:JSONEncode(currentServers))
+    end)
+end
+
+-- Check if any other account is in a server
+local function isServerOccupiedByLAN(jobId)
+    cleanCurrentServers()
+    for userId, data in pairs(currentServers) do
+        -- Skip self
+        if userId ~= tostring(Players.LocalPlayer.UserId) then
+            if data.jobId == jobId then
+                print(string.format("[LAN] Server %s is occupied by account %s", jobId:sub(1, 8), userId))
+                return true
+            end
+        end
+    end
+    return false
+end
 
 -- Create folder and load history
 pcall(function() 
@@ -276,7 +326,7 @@ local function serverHop()
     
     -- Filter and sort servers by age/uptime
     local validServers = {}
-    local skippedReasons = {visited = 0, current = 0, full = 0}
+    local skippedReasons = {visited = 0, current = 0, full = 0, lan_occupied = 0}
     local currentTime = os.time()
     
     for _, server in ipairs(servers.data) do
@@ -291,6 +341,8 @@ local function serverHop()
             skippedReasons.current = skippedReasons.current + 1
         elseif playerCount >= maxPlayers then
             skippedReasons.full = skippedReasons.full + 1
+        elseif isServerOccupiedByLAN(jid) then
+            skippedReasons.lan_occupied = skippedReasons.lan_occupied + 1
         else
             -- Valid server - calculate priority score
             local serverScore = playerCount -- Higher player count = likely older server
@@ -304,8 +356,8 @@ local function serverHop()
         end
     end
     
-    print(string.format("[HOP] Skipped: %d visited, %d current, %d full", 
-        skippedReasons.visited, skippedReasons.current, skippedReasons.full))
+    print(string.format("[HOP] Skipped: %d visited, %d current, %d full, %d LAN occupied", 
+        skippedReasons.visited, skippedReasons.current, skippedReasons.full, skippedReasons.lan_occupied))
     print(string.format("[HOP] Found %d valid servers to check", #validServers))
     
     if #validServers == 0 then
@@ -401,6 +453,10 @@ end
 print("[HOPPER] Checking current server...")
 print("[DEBUG] Workspace children:", Workspace:GetChildren())
 
+-- Register this account's current server
+updateCurrentServer()
+print(string.format("[LAN] Registered in server: %s", game.JobId:sub(1, 8)))
+
 local sprout = getspr()
 
 if sprout then
@@ -413,6 +469,14 @@ end
 
 -- Start hopping loop
 print("[HOP] Starting server hop cycle...")
+
+-- Update current server periodically (every 30 seconds)
+task.spawn(function()
+    while task.wait(30) do
+        updateCurrentServer()
+    end
+end)
+
 while task.wait(3) do
     pcall(serverHop)
 end
