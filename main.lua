@@ -11,9 +11,9 @@ local PLACE_ID = game.PlaceId
 local HOP_DELAY = 1
 local TELEPORT_TIMEOUT = 8 -- Seconds before trying next server
 
--- Server hop state
+-- Server hop state - EACH ACCOUNT NOW HAS UNIQUE HISTORY
 local file = {}
-local file2 = "sprout-hop/" .. Players.LocalPlayer.UserId .. ".json"
+local file2 = "sprout-hop/history_" .. Players.LocalPlayer.UserId .. ".json"  -- Unique per account
 local currentTeleportAttempt = 0
 local lastTeleportTime = 0
 
