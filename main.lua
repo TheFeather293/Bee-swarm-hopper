@@ -8,7 +8,8 @@ local WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p
 
 -- Configuration
 local PLACE_ID = game.PlaceId
-local HOP_DELAY = 2 -- Seconds to wait before hopping (gives time for webhook to send)
+local HOP_DELAY = 0.5 -- Minimal delay (0.5 seconds)
+local CHECK_TIMEOUT = 2 -- Max time to wait for sprouts folder
 
 -- Field thumbnail mapping (using exact field names from FlowerZones)
 local fieldThumbnails = {
@@ -31,7 +32,12 @@ local fieldThumbnails = {
     ["Coconut Field"] = "https://static.wikia.nocookie.net/bee-swarm-simulator/images/6/62/Hivesticker_coconut_field_stamp.png"
 }
 
--- Function to get field name from position
+-- Cache server list for faster hopping
+local cachedServers = nil
+local lastServerFetch = 0
+local SERVER_CACHE_TIME = 30 -- Cache servers for 30 seconds
+
+-- Function to get field name from position (optimized)
 local function getFieldName(pos)
     local FlowerZones = Workspace:FindFirstChild("FlowerZones")
     if not FlowerZones then return "Unknown Field" end
@@ -51,201 +57,192 @@ local function getFieldName(pos)
     return "Unknown Field"
 end
 
--- Function to server hop
-local function serverHop()
-    print("[HOP] Searching for new server...")
+-- Function to get servers (with caching)
+local function getServers()
+    local currentTime = tick()
+    
+    -- Use cache if recent
+    if cachedServers and (currentTime - lastServerFetch) < SERVER_CACHE_TIME then
+        return cachedServers
+    end
     
     local success, result = pcall(function()
-        local servers = HttpService:JSONDecode(game:HttpGet(
+        return HttpService:JSONDecode(game:HttpGet(
             "https://games.roblox.com/v1/games/" .. PLACE_ID .. "/servers/Public?sortOrder=Asc&limit=100"
         ))
-        
-        if servers and servers.data then
-            -- Filter out current server and full servers
-            local availableServers = {}
-            for _, server in pairs(servers.data) do
-                if server.id ~= game.JobId and server.playing < server.maxPlayers then
-                    table.insert(availableServers, server)
-                end
-            end
-            
-            if #availableServers > 0 then
-                -- Pick random server
-                local randomServer = availableServers[math.random(1, #availableServers)]
-                print(string.format("[HOP] Found server with %d/%d players", randomServer.playing, randomServer.maxPlayers))
-                
-                TeleportService:TeleportToPlaceInstance(PLACE_ID, randomServer.id, Players.LocalPlayer)
-            else
-                print("[HOP] No available servers, trying again...")
-                task.wait(2)
-                TeleportService:Teleport(PLACE_ID, Players.LocalPlayer)
+    end)
+    
+    if success and result and result.data then
+        cachedServers = result.data
+        lastServerFetch = currentTime
+        return result.data
+    end
+    
+    return nil
+end
+
+-- Function to server hop (optimized)
+local function serverHop()
+    print("[HOP] Finding server...")
+    
+    local servers = getServers()
+    
+    if servers then
+        -- Filter valid servers
+        local validServers = {}
+        for _, server in pairs(servers) do
+            if server.id ~= game.JobId and server.playing < server.maxPlayers then
+                table.insert(validServers, server)
             end
         end
-    end)
-    
-    if not success then
-        warn("[HOP] Failed to hop:", result)
-        task.wait(2)
-        TeleportService:Teleport(PLACE_ID, Players.LocalPlayer)
+        
+        if #validServers > 0 then
+            local targetServer = validServers[math.random(1, #validServers)]
+            print(string.format("[HOP] → %d/%d players", targetServer.playing, targetServer.maxPlayers))
+            
+            TeleportService:TeleportToPlaceInstance(PLACE_ID, targetServer.id, Players.LocalPlayer)
+            return
+        end
     end
+    
+    -- Fallback: Random server
+    print("[HOP] → Random server")
+    TeleportService:Teleport(PLACE_ID, Players.LocalPlayer)
 end
 
--- Function to send webhook for a sprout
+-- Function to send webhook for a sprout (non-blocking)
 local function sendSproutWebhook(sprout)
-    local pos = sprout.Position
-    local sproutName = sprout.Name
-    local fieldName = getFieldName(pos)
-    
-    -- Rare / Normal / Epic / Gummy / Moon / Legendary detection
-    local brickColor = sprout.BrickColor.Name
-    local sproutType
-    local embedColor
-    if brickColor == "Light grey metallic" then
-        sproutType = "Rare"
-        embedColor = 0x5865F2
-    elseif brickColor == "Sage green" then
-        sproutType = "Normal"
-        embedColor = 0x57F287
-    elseif brickColor == "CGA brown" then
-        sproutType = "Epic"
-        embedColor = 0xFEE75C
-    elseif brickColor == "Alder" then
-        sproutType = "Gummy"
-        embedColor = 0xE91E63
-    elseif brickColor == "Medium blue" then
-        sproutType = "Moon"
-        embedColor = 0x00BFFF
-    elseif brickColor == "Electric blue" then
-        sproutType = "Legendary"
-        embedColor = 0xFF00FF
-    else
-        sproutType = "Supreme"
-        embedColor = 0xFFD700
-    end
-    
-    -- Grab pollen left from GUI
-    local pollenText = "Unknown"
-    local success, guiLabel = pcall(function()
-        return sprout:WaitForChild("GuiPos", 1):WaitForChild("Gui"):WaitForChild("Frame"):WaitForChild("TextLabel")
+    task.spawn(function()
+        local pos = sprout.Position
+        local fieldName = getFieldName(pos)
+        
+        local brickColor = sprout.BrickColor.Name
+        local sproutType, embedColor
+        
+        if brickColor == "Light grey metallic" then
+            sproutType = "Rare"
+            embedColor = 0x5865F2
+        elseif brickColor == "Sage green" then
+            sproutType = "Normal"
+            embedColor = 0x57F287
+        elseif brickColor == "CGA brown" then
+            sproutType = "Epic"
+            embedColor = 0xFEE75C
+        elseif brickColor == "Alder" then
+            sproutType = "Gummy"
+            embedColor = 0xE91E63
+        elseif brickColor == "Medium blue" then
+            sproutType = "Moon"
+            embedColor = 0x00BFFF
+        elseif brickColor == "Electric blue" then
+            sproutType = "Legendary"
+            embedColor = 0xFF00FF
+        else
+            sproutType = "Supreme"
+            embedColor = 0xFFD700
+        end
+        
+        local pollenText = "Unknown"
+        pcall(function()
+            local guiLabel = sprout:FindFirstChild("GuiPos", true):FindFirstChild("Gui", true):FindFirstChild("Frame", true):FindFirstChild("TextLabel", true)
+            if guiLabel then
+                pollenText = guiLabel.Text
+            end
+        end)
+        
+        local playerCount = #Players:GetPlayers()
+        local maxPlayers = Players.MaxPlayers
+        
+        local jobId = game.JobId
+        local placeId = game.PlaceId
+        local webLink = string.format("https://www.roblox.com/games/start?placeId=%s&launchData=%%7B%%22gameId%%22%%3A%%22%s%%22%%7D", placeId, jobId)
+        local directLink = string.format("roblox://placeID=%s&gameInstanceId=%s", placeId, jobId)
+        
+        local emoji = "🌱"
+        if sproutType == "Rare" then emoji = "🌟"
+        elseif sproutType == "Epic" then emoji = "🔥"
+        elseif sproutType == "Gummy" then emoji = "🍬"
+        elseif sproutType == "Moon" then emoji = "🌙"
+        elseif sproutType == "Legendary" then emoji = "⚡"
+        elseif sproutType == "Supreme" then emoji = "👑"
+        end
+        
+        local thumbnailUrl = fieldThumbnails[fieldName]
+        
+        print(string.format("[FOUND] %s %s @ %s", emoji, sproutType, fieldName))
+        
+        local embed = {
+            title = string.format("%s %s Sprout Detected!", emoji, sproutType),
+            color = embedColor,
+            fields = {
+                {
+                    name = "📍 Position",
+                    value = string.format("```%.2f, %.2f, %.2f```", pos.X, pos.Y, pos.Z),
+                    inline = true
+                },
+                {
+                    name = "🌸 Pollen Left",
+                    value = string.format("```%s```", pollenText),
+                    inline = true
+                },
+                {
+                    name = "🌾 Field",
+                    value = string.format("```%s```", fieldName),
+                    inline = true
+                },
+                {
+                    name = "😳 Players",
+                    value = string.format("```%d/%d```", playerCount, maxPlayers),
+                    inline = true
+                },
+                {
+                    name = "🔗 Join Server",
+                    value = string.format("**[Click Here to Join](%s)**\n```%s```", webLink, directLink),
+                    inline = false
+                }
+            },
+            footer = {
+                text = "Sprout Hopper • " .. os.date("%I:%M %p")
+            },
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%S")
+        }
+        
+        if thumbnailUrl then
+            embed.thumbnail = { url = thumbnailUrl }
+        end
+        
+        pcall(function()
+            request({
+                Url = WEBHOOK_URL,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = HttpService:JSONEncode({ embeds = {embed} })
+            })
+        end)
     end)
-    if success and guiLabel then
-        pollenText = guiLabel.Text
-    end
-    
-    -- Players in server
-    local playerCount = #Players:GetPlayers()
-    local maxPlayers = Players.MaxPlayers
-    
-    -- Join links
-    local jobId = game.JobId
-    local placeId = game.PlaceId
-    local webLink = string.format("https://www.roblox.com/games/start?placeId=%s&launchData=%%7B%%22gameId%%22%%3A%%22%s%%22%%7D", placeId, jobId)
-    local directLink = string.format("roblox://placeID=%s&gameInstanceId=%s", placeId, jobId)
-    
-    -- Emoji based on sprout type
-    local emoji
-    if sproutType == "Rare" then
-        emoji = "🌟"
-    elseif sproutType == "Epic" then
-        emoji = "🔥"
-    elseif sproutType == "Gummy" then
-        emoji = "🍬"
-    elseif sproutType == "Moon" then
-        emoji = "🌙"
-    elseif sproutType == "Legendary" then
-        emoji = "⚡"
-    elseif sproutType == "Supreme" then
-        emoji = "👑"
-    else
-        emoji = "🌱"
-    end
-    
-    local thumbnailUrl = fieldThumbnails[fieldName]
-    
-    print(string.format("[SPROUT FOUND] %s %s in %s", emoji, sproutType, fieldName))
-    
-    -- Build embed
-    local embed = {
-        title = string.format("%s %s Sprout Detected!", emoji, sproutType),
-        color = embedColor,
-        fields = {
-            {
-                name = "📍 Position",
-                value = string.format("```%.2f, %.2f, %.2f```", pos.X, pos.Y, pos.Z),
-                inline = true
-            },
-            {
-                name = "🌸 Pollen Left",
-                value = string.format("```%s```", pollenText),
-                inline = true
-            },
-            {
-                name = "🌾 Field",
-                value = string.format("```%s```", fieldName),
-                inline = true
-            },
-            {
-                name = "😳 Players",
-                value = string.format("```%d/%d```", playerCount, maxPlayers),
-                inline = true
-            },
-            {
-                name = "🔗 Join Server",
-                value = string.format("**[Click Here to Join](%s)**\n```%s```", webLink, directLink),
-                inline = false
-            }
-        },
-        footer = {
-            text = "Sprout Tracker • " .. os.date("%I:%M %p")
-        },
-        timestamp = os.date("!%Y-%m-%dT%H:%M:%S")
-    }
-    
-    if thumbnailUrl then
-        embed.thumbnail = { url = thumbnailUrl }
-    end
-    
-    -- Send webhook
-    request({
-        Url = WEBHOOK_URL,
-        Method = "POST",
-        Headers = {["Content-Type"] = "application/json"},
-        Body = HttpService:JSONEncode({
-            embeds = {embed}
-        })
-    })
 end
 
--- Main logic
-print("=================================")
-print("  Sprout Server Hopper")
-print("  Checking current server...")
-print("=================================")
+-- Main logic (ultra-fast)
+print("[HOPPER] Checking server...")
 
-local sproutsFolder = Workspace:WaitForChild("Sprouts", 5)
+local sproutsFolder = Workspace:FindFirstChild("Sprouts")
+local foundSprout = false
 
 if sproutsFolder then
-    local foundSprout = false
-    
-    -- Check for existing sprouts
     for _, sprout in pairs(sproutsFolder:GetChildren()) do
         if sprout:IsA("MeshPart") then
             foundSprout = true
-            print("[✓] Sprout found! Sending webhook...")
-            sendSproutWebhook(sprout)
-            break -- Only send webhook for first sprout found
+            sendSproutWebhook(sprout) -- Non-blocking
+            print("[✓] Sprout detected! Webhook sending...")
+            task.wait(HOP_DELAY) -- Minimal delay
+            break
         end
     end
-    
-    if foundSprout then
-        print(string.format("[HOP] Webhook sent! Hopping in %d seconds...", HOP_DELAY))
-        task.wait(HOP_DELAY)
-    else
-        print("[✗] No sprouts in this server")
-    end
-else
-    print("[✗] Sprouts folder not found")
 end
 
--- Hop to next server
+if not foundSprout then
+    print("[✗] No sprouts")
+end
+
+-- Hop immediately
 serverHop()
