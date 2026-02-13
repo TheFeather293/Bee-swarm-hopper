@@ -2,7 +2,7 @@
 local config = {}
 
 -- Discord webhook URL
-config.WEBHOOK_URL = "https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE"
+config.WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p3jtZCq69RV6st5q3bXHTDdgMe9NZeK_agQVMQT_QS0KTpxRZRQvqeGbotNTCMa"
 
 -- Field thumbnails mapping
 config.FIELD_THUMBNAILS = {
