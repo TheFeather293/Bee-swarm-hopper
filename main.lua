@@ -117,6 +117,8 @@ local function sendSproutWebhook(sprout)
         emoji = "🍬"
     elseif sproutType == "Moon" then
         emoji = "🌙"
+    elseif sproutType == "Legendary" then
+        emoji = "⚡"
     else
         emoji = "🌱"
     end
@@ -130,37 +132,22 @@ local function sendSproutWebhook(sprout)
     print("BrickColor:", brickColor)
     print("Thumbnail URL:", thumbnailUrl or "Not found")
     
+    -- Build description with inline format
+    local description = string.format(
+        "**Position:** `%.2f, %.2f, %.2f` **Pollen Left:** `%s`\n**Field:** `%s` **Players:** `%d/%d`\n**Join Server:** [Click Here](%s) `%s`",
+        pos.X, pos.Y, pos.Z,
+        pollenText,
+        fieldName,
+        playerCount, maxPlayers,
+        webLink,
+        directLink
+    )
+    
     -- Build embed
     local embed = {
         title = string.format("%s %s Sprout Detected!", emoji, sproutType),
+        description = description,
         color = embedColor,
-        fields = {
-            {
-                name = "📍 Position",
-                value = string.format("```%.2f, %.2f, %.2f```", pos.X, pos.Y, pos.Z),
-                inline = true
-            },
-            {
-                name = "🌸 Pollen Left",
-                value = string.format("```%s```", pollenText),
-                inline = true
-            },
-            {
-                name = "🌾 Field",
-                value = string.format("```%s```", fieldName),
-                inline = true
-            },
-            {
-                name = "😳 Players",
-                value = string.format("```%d/%d```", playerCount, maxPlayers),
-                inline = true
-            },
-            {
-                name = "🔗 Join Server",
-                value = string.format("**[Click Here to Join](%s)**\n```%s```", webLink, directLink),
-                inline = false
-            }
-        },
         footer = {
             text = "Sprout Tracker • " .. os.date("%I:%M %p")
         },
