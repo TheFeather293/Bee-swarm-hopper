@@ -10,7 +10,7 @@ local WEBHOOK_URL = "https://discord.com/api/webhooks/1471934269462024217/0mVk1H
 local PLACE_ID = game.PlaceId
 local HOP_DELAY = 1
 local TELEPORT_TIMEOUT = 8 -- Seconds before trying next server
-local MIN_PLAYERS_TO_JOIN = 2 -- Ignore servers with fewer players (likely new/empty)
+local MIN_PLAYERS_TO_JOIN = 1 -- Minimum players (1 = accept any non-empty server)
 local PREFER_POPULATED_SERVERS = true -- Prioritize servers with more players (older servers)
 
 -- Server hop state - EACH ACCOUNT NOW HAS UNIQUE HISTORY
@@ -272,8 +272,11 @@ local function serverHop()
         return
     end
     
+    print(string.format("[HOP] Fetched %d total servers from API", #servers.data))
+    
     -- Filter and sort servers by age/uptime
     local validServers = {}
+    local skippedReasons = {visited = 0, current = 0, full = 0}
     local currentTime = os.time()
     
     for _, server in ipairs(servers.data) do
@@ -281,10 +284,15 @@ local function serverHop()
         local playerCount = tonumber(server.playing)
         local maxPlayers = tonumber(server.maxPlayers)
         
-        -- Skip if already visited, current server, or full
-        if not file[jid] and jid ~= game.JobId and playerCount < maxPlayers then
-            -- Calculate server age (servers with more players are usually older)
-            -- Also check if server has been up for a while
+        -- Track why servers are skipped
+        if file[jid] then
+            skippedReasons.visited = skippedReasons.visited + 1
+        elseif jid == game.JobId then
+            skippedReasons.current = skippedReasons.current + 1
+        elseif playerCount >= maxPlayers then
+            skippedReasons.full = skippedReasons.full + 1
+        else
+            -- Valid server - calculate priority score
             local serverScore = playerCount -- Higher player count = likely older server
             
             table.insert(validServers, {
@@ -296,17 +304,28 @@ local function serverHop()
         end
     end
     
+    print(string.format("[HOP] Skipped: %d visited, %d current, %d full", 
+        skippedReasons.visited, skippedReasons.current, skippedReasons.full))
+    print(string.format("[HOP] Found %d valid servers to check", #validServers))
+    
+    if #validServers == 0 then
+        print("[HOP] No unvisited servers available, clearing history...")
+        file = {} -- Clear history to allow revisiting servers
+        savehist()
+        return
+    end
+    
     -- Sort by score (higher = older/better servers first)
     table.sort(validServers, function(a, b)
         return a.score > b.score
     end)
     
-    print(string.format("[HOP] Found %d valid servers to check", #validServers))
-    
     -- Try servers in order of priority
+    local attempted = 0
     for i, server in ipairs(validServers) do
-        -- Skip very new servers based on MIN_PLAYERS_TO_JOIN setting
-        if server.playing >= MIN_PLAYERS_TO_JOIN then
+        -- Apply MIN_PLAYERS filter but with fallback
+        if server.playing >= MIN_PLAYERS_TO_JOIN or (i > 10 and server.playing > 0) then
+            attempted = attempted + 1
             print(string.format("[HOP] [%d/%d] Attempting server with %d/%d players (Score: %d)", 
                 i, #validServers, server.playing, server.maxPlayers, server.score))
             
@@ -331,11 +350,30 @@ local function serverHop()
                 lastTeleportTime = 0
             end
         else
-            print(string.format("[HOP] Skipping new server with only %d players", server.playing))
+            print(string.format("[HOP] Skipping low-population server (%d players)", server.playing))
         end
     end
     
-    print("[HOP] No suitable servers found, will retry...")
+    if attempted == 0 then
+        print("[HOP] All servers filtered out by MIN_PLAYERS setting, lowering standards...")
+        -- Try ANY server as last resort
+        for i, server in ipairs(validServers) do
+            if server.playing > 0 then
+                print(string.format("[HOP] FALLBACK: Trying server with %d players", server.playing))
+                
+                file[server.id] = os.time()
+                savehist()
+                lastTeleportTime = tick()
+                
+                pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PLACE_ID, server.id, Players.LocalPlayer)
+                end)
+                return
+            end
+        end
+    end
+    
+    print("[HOP] Exhausted all options, will retry...")
 end
 
 -- Check for sprouts
