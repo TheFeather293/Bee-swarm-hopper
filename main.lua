@@ -83,11 +83,20 @@ end
 
 -- Function to send webhook
 local function sendSproutWebhook(sprout)
+    print("[WEBHOOK] Starting webhook send process...")
+    
     task.spawn(function()
+        print("[WEBHOOK] Task spawned successfully")
+        
         local pos = sprout.Position
+        print(string.format("[WEBHOOK] Sprout position: %.2f, %.2f, %.2f", pos.X, pos.Y, pos.Z))
+        
         local fieldName = getFieldName(pos)
+        print("[WEBHOOK] Field name:", fieldName)
         
         local brickColor = sprout.BrickColor.Name
+        print("[WEBHOOK] BrickColor:", brickColor)
+        
         local sproutType, embedColor
         
         if brickColor == "Light grey metallic" then
@@ -113,6 +122,8 @@ local function sendSproutWebhook(sprout)
             embedColor = 0xFFD700
         end
         
+        print("[WEBHOOK] Sprout type:", sproutType, "Color:", embedColor)
+        
         local pollenText = "Unknown"
         pcall(function()
             local guiLabel = sprout:FindFirstChild("GuiPos", true):FindFirstChild("Gui", true):FindFirstChild("Frame", true):FindFirstChild("TextLabel", true)
@@ -120,14 +131,19 @@ local function sendSproutWebhook(sprout)
                 pollenText = guiLabel.Text
             end
         end)
+        print("[WEBHOOK] Pollen text:", pollenText)
         
         local playerCount = #Players:GetPlayers()
         local maxPlayers = Players.MaxPlayers
+        print(string.format("[WEBHOOK] Players: %d/%d", playerCount, maxPlayers))
         
         local jobId = game.JobId
         local placeId = game.PlaceId
         local webLink = string.format("https://www.roblox.com/games/start?placeId=%s&launchData=%%7B%%22gameId%%22%%3A%%22%s%%22%%7D", placeId, jobId)
         local directLink = string.format("roblox://placeID=%s&gameInstanceId=%s", placeId, jobId)
+        
+        print("[WEBHOOK] JobId:", jobId)
+        print("[WEBHOOK] PlaceId:", placeId)
         
         local emoji = "🌱"
         if sproutType == "Rare" then emoji = "🌟"
@@ -182,14 +198,42 @@ local function sendSproutWebhook(sprout)
             embed.thumbnail = { url = thumbnailUrl }
         end
         
-        pcall(function()
-            request({
+        print("[WEBHOOK] Embed created, preparing to send...")
+        
+        -- Check if request function exists
+        if not request then
+            warn("[WEBHOOK] ERROR: 'request' function not found! Your executor may not support it.")
+            warn("[WEBHOOK] Try: request, http_request, or syn.request")
+            return
+        end
+        
+        print("[WEBHOOK] Request function found:", type(request))
+        
+        local webhookBody = HttpService:JSONEncode({ embeds = {embed} })
+        print("[WEBHOOK] JSON body created, length:", #webhookBody)
+        
+        local success, result = pcall(function()
+            print("[WEBHOOK] Sending HTTP request...")
+            local response = request({
                 Url = WEBHOOK_URL,
                 Method = "POST",
                 Headers = {["Content-Type"] = "application/json"},
-                Body = HttpService:JSONEncode({ embeds = {embed} })
+                Body = webhookBody
             })
+            print("[WEBHOOK] Response received:", response)
+            return response
         end)
+        
+        if success then
+            print("[WEBHOOK] ✓ Webhook sent successfully!")
+            if result then
+                print("[WEBHOOK] Response status:", result.StatusCode or "unknown")
+                print("[WEBHOOK] Response body:", result.Body or "no body")
+            end
+        else
+            warn("[WEBHOOK] ✗ Failed to send webhook!")
+            warn("[WEBHOOK] Error:", tostring(result))
+        end
     end)
 end
 
