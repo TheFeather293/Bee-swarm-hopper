@@ -4,26 +4,38 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local request = request or http_request or syn.request
-local WEBHOOK_URL = "https://discord.com/api/webhooks/1471934269462024217/0mVk1Hbl4Fi_1EtrFGPkwhE3fUyjMBcg7rwEwPpW1clj8l_Gs94C2h0seASRbspsTpIA"
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1471567811364257948/5rWB6p3jtZCq69RV6st5q3bXHTDdgMe9NZeK_agQVMQT_QS0KTpxRZRQvqeGbotNTCMa"
 
 -- Configuration
 local PLACE_ID = game.PlaceId
 local HOP_DELAY = 1
 
 -- Server hop state
-local AllIDs = {}
-local foundAnything = ""
-local actualHour = os.date("!*t").hour
-local isTeleporting = false
+local file = {}
+local file2 = "sprout-hop/" .. Players.LocalPlayer.UserId .. ".json"
+local esheposidim = false -- "we are hopping" flag
+local hop = false -- "teleport in progress" flag
 
--- Load visited servers
-local File = pcall(function()
-    AllIDs = HttpService:JSONDecode(readfile("server-hop-temp.json"))
+-- Create folder and load history
+pcall(function() 
+    if not isfolder("sprout-hop") then 
+        makefolder("sprout-hop") 
+    end 
 end)
-if not File then
-    table.insert(AllIDs, actualHour)
-    pcall(function()
-        writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
+
+pcall(function() 
+    if isfile(file2) then 
+        file = HttpService:JSONDecode(readfile(file2)) 
+    end 
+end)
+
+-- Save visited servers
+local function savehist()
+    local c = 0
+    for _ in pairs(file) do c = c + 1 end
+    if c >= 50 then file = {} end -- Clear after 50 servers
+    pcall(function() 
+        writefile(file2, HttpService:JSONEncode(file)) 
     end)
 end
 
@@ -180,155 +192,101 @@ local function sendSproutWebhook(sprout)
     end)
 end
 
--- Server hop function with teleport failure handling
-local function attemptTeleport(serverId, playerCount, maxPlayers)
-    print(string.format("[HOP] Attempting to join server with %d/%d players...", playerCount, maxPlayers))
+-- Teleport to server
+local function go(jid)
+    if hop then return false end
+    if file[jid] then return false end
     
-    isTeleporting = true
+    hop = true
+    esheposidim = true
+    file[jid] = os.time()
+    savehist()
     
-    -- Listen for teleport failures
-    local failConnection
-    failConnection = TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
-        warn(string.format("[HOP] Teleport failed: %s - %s", tostring(teleportResult), tostring(errorMessage)))
-        
-        -- Check if server is full
-        if errorMessage and (errorMessage:find("full") or errorMessage:find("Full")) then
-            print("[HOP] Server is full, marking as visited and trying next server...")
-            table.insert(AllIDs, serverId)
-            pcall(function()
-                writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
-            end)
-        end
-        
-        isTeleporting = false
-        failConnection:Disconnect()
+    print(string.format("[HOP] Teleporting to server: %s", jid))
+    pcall(function() 
+        TeleportService:TeleportToPlaceInstance(PLACE_ID, jid, Players.LocalPlayer) 
     end)
     
-    -- Attempt teleport
-    local success = pcall(function()
-        TeleportService:TeleportToPlaceInstance(PLACE_ID, serverId, Players.LocalPlayer)
-    end)
-    
-    if not success then
-        warn("[HOP] Teleport call failed")
-        isTeleporting = false
-        if failConnection then
-            failConnection:Disconnect()
-        end
-        return false
-    end
-    
-    -- If successful, wait indefinitely for teleport to complete
-    task.wait(2)
     return true
 end
 
+-- Reset flags on teleport failure
+TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+    if player == Players.LocalPlayer then
+        warn(string.format("[HOP] Teleport failed: %s - %s", tostring(teleportResult), tostring(errorMessage)))
+        hop = false
+        esheposidim = false
+    end
+end)
+
 -- Server hop function
-local function TPReturner()
-    -- Check if already teleporting
-    if isTeleporting then
-        return false
+local function serverHop()
+    if esheposidim or hop then return end
+    
+    local success, servers = pcall(function()
+        return HttpService:JSONDecode(
+            game:HttpGet('https://games.roblox.com/v1/games/' .. PLACE_ID .. '/servers/Public?sortOrder=Asc&limit=100')
+        )
+    end)
+    
+    if not success or not servers or not servers.data then
+        warn("[HOP] Failed to fetch servers")
+        return
     end
     
-    local Site
-    if foundAnything == "" then
-        Site = HttpService:JSONDecode(game:HttpGet('https://games.roblox.com/v1/games/' .. PLACE_ID .. '/servers/Public?sortOrder=Asc&limit=100'))
-    else
-        Site = HttpService:JSONDecode(game:HttpGet('https://games.roblox.com/v1/games/' .. PLACE_ID .. '/servers/Public?sortOrder=Asc&limit=100&cursor=' .. foundAnything))
-    end
-    
-    local ID = ""
-    if Site.nextPageCursor and Site.nextPageCursor ~= "null" and Site.nextPageCursor ~= nil then
-        foundAnything = Site.nextPageCursor
-    end
-    
-    local num = 0
-    for i, v in pairs(Site.data) do
-        local Possible = true
-        ID = tostring(v.id)
+    -- Try each server
+    for _, server in ipairs(servers.data) do
+        local jid = tostring(server.id)
         
-        -- Skip full servers immediately
-        if tonumber(v.playing) >= tonumber(v.maxPlayers) then
-            print(string.format("[HOP] Skipping full server (%d/%d)", v.playing, v.maxPlayers))
-            Possible = false
-        end
-        
-        if Possible then
-            for _, Existing in pairs(AllIDs) do
-                if num ~= 0 then
-                    if ID == tostring(Existing) then
-                        Possible = false
-                    end
-                else
-                    if tonumber(actualHour) ~= tonumber(Existing) then
-                        pcall(function()
-                            delfile("server-hop-temp.json")
-                            AllIDs = {}
-                            table.insert(AllIDs, actualHour)
-                        end)
-                    end
+        -- Skip if already visited or current server
+        if not file[jid] and jid ~= game.JobId then
+            -- Skip full servers
+            if tonumber(server.playing) < tonumber(server.maxPlayers) then
+                print(string.format("[HOP] Found server with %d/%d players", server.playing, server.maxPlayers))
+                
+                if go(jid) then
+                    return
                 end
-                num = num + 1
+            else
+                print(string.format("[HOP] Skipping full server (%d/%d)", server.playing, server.maxPlayers))
             end
-        end
-        
-        if Possible and not isTeleporting then
-            table.insert(AllIDs, ID)
-            
-            pcall(function()
-                writefile("server-hop-temp.json", HttpService:JSONEncode(AllIDs))
-            end)
-            
-            -- Attempt teleport
-            local teleported = attemptTeleport(ID, v.playing, v.maxPlayers)
-            
-            if teleported then
-                return true
-            end
-            
-            -- If teleport failed, continue to next server
-            task.wait(1)
         end
     end
     
-    return false
+    print("[HOP] No new servers found in this batch")
+end
+
+-- Check for sprouts
+local function getspr()
+    local s = Workspace:FindFirstChild("Sprouts")
+    if not s then return end
+    
+    for _, sprout in ipairs(s:GetChildren()) do
+        if sprout:IsA("MeshPart") then
+            return sprout
+        end
+    end
 end
 
 -- Main logic
 print("[HOPPER] Checking current server...")
 
-local sproutsFolder = Workspace:FindFirstChild("Sprouts")
-local foundSprout = false
+local sprout = getspr()
 
-if sproutsFolder then
-    for _, sprout in pairs(sproutsFolder:GetChildren()) do
-        if sprout:IsA("MeshPart") then
-            foundSprout = true
-            sendSproutWebhook(sprout)
-            print("[✓] Sprout detected! Webhook sending...")
-            task.wait(HOP_DELAY)
-            break
-        end
-    end
-end
-
-if not foundSprout then
+if sprout then
+    print("[✓] Sprout found! Sending webhook...")
+    sendSproutWebhook(sprout)
+    task.wait(HOP_DELAY)
+else
     print("[✗] No sprouts in this server")
 end
 
--- Start hopping
+-- Start hopping loop
 print("[HOP] Starting server hop cycle...")
-while task.wait(2) do
-    if not isTeleporting then
-        local success = pcall(function()
-            local hopped = TPReturner()
-            if not hopped and foundAnything ~= "" then
-                TPReturner()
-            end
-        end)
-        
-        if not success then
-            warn("[HOP] Error in hop cycle, retrying...")
-        end
+while task.wait(3) do
+    if not esheposidim and not hop then
+        pcall(serverHop)
+    else
+        print("[HOP] Waiting for teleport to complete...")
     end
 end
