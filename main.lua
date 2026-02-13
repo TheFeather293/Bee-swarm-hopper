@@ -9,8 +9,7 @@ local WEBHOOK_URL = "https://discord.com/api/webhooks/1471934269462024217/0mVk1H
 -- Configuration
 local PLACE_ID = game.PlaceId
 local HOP_DELAY = 1
-local MAX_RETRIES = 5  -- Number of times to retry hopping
-local RETRY_DELAY = 3  -- Seconds to wait between retries
+local RETRY_DELAY = 3  -- Seconds to wait between retry attempts
 
 -- Field thumbnail mapping
 local fieldThumbnails = {
@@ -165,13 +164,10 @@ local function sendSproutWebhook(sprout)
     end)
 end
 
--- Simple server hop with retry system
+-- Simple server hop with infinite retry system
 local function serverHop()
-    local retryCount = 0
-    
-    while retryCount < MAX_RETRIES do
-        retryCount = retryCount + 1
-        print(string.format("[HOP] Attempt %d/%d", retryCount, MAX_RETRIES))
+    while true do  -- Keep trying forever
+        print("[HOP] Attempting to find a new server...")
         
         local success, servers = pcall(function()
             return HttpService:JSONDecode(
@@ -180,7 +176,7 @@ local function serverHop()
         end)
         
         if not success or not servers or not servers.data then
-            warn(string.format("[HOP] Failed to fetch servers (Attempt %d/%d)", retryCount, MAX_RETRIES))
+            warn("[HOP] Failed to fetch servers, retrying in 3 seconds...")
             task.wait(RETRY_DELAY)
             continue
         end
@@ -188,14 +184,12 @@ local function serverHop()
         print(string.format("[HOP] Found %d servers", #servers.data))
         
         -- Try to join any server that's not current and not full
-        local attempted = 0
         for _, server in ipairs(servers.data) do
             local jid = tostring(server.id)
             local playerCount = tonumber(server.playing)
             local maxPlayers = tonumber(server.maxPlayers)
             
             if jid ~= game.JobId and playerCount < maxPlayers then
-                attempted = attempted + 1
                 print(string.format("[HOP] Joining server with %d/%d players (JobId: %s)", playerCount, maxPlayers, jid:sub(1, 8)))
                 
                 local teleportSuccess, teleportError = pcall(function()
@@ -203,29 +197,19 @@ local function serverHop()
                 end)
                 
                 if teleportSuccess then
-                    print("[HOP] Teleport initiated successfully!")
-                    return true
+                    print("[HOP] Teleport initiated! Waiting for teleport...")
+                    task.wait(10)  -- Wait for teleport to complete
+                    -- If we're still here, teleport failed somehow
+                    warn("[HOP] Still in same server, trying next...")
                 else
-                    warn(string.format("[HOP] Teleport failed: %s", tostring(teleportError)))
-                    -- Try next server
+                    warn(string.format("[HOP] Teleport failed: %s, trying next server...", tostring(teleportError)))
                 end
             end
         end
         
-        if attempted == 0 then
-            warn(string.format("[HOP] No available servers found (Attempt %d/%d)", retryCount, MAX_RETRIES))
-        else
-            warn(string.format("[HOP] All teleport attempts failed (Attempt %d/%d)", retryCount, MAX_RETRIES))
-        end
-        
-        if retryCount < MAX_RETRIES then
-            print(string.format("[HOP] Waiting %d seconds before retry...", RETRY_DELAY))
-            task.wait(RETRY_DELAY)
-        end
+        warn("[HOP] No valid servers or all attempts failed, retrying in 3 seconds...")
+        task.wait(RETRY_DELAY)
     end
-    
-    warn("[HOP] Max retries reached, giving up...")
-    return false
 end
 
 -- Check for sprouts
@@ -241,33 +225,24 @@ local function getspr()
 end
 
 -- Main logic
-print("[HOPPER] Checking current server...")
+print("[HOPPER] Starting sprout hopper...")
 
+-- Check current server first
 local sprout = getspr()
-
 if sprout then
-    print("[✓] Sprout found! Sending webhook...")
+    print("[✓] Sprout found in current server! Sending webhook...")
     sendSproutWebhook(sprout)
     task.wait(HOP_DELAY)
-else
-    print("[✗] No sprouts in this server, hopping...")
 end
 
--- Handle teleport failures
+-- Handle teleport failures and retry
 TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
     if player == Players.LocalPlayer then
         warn(string.format("[HOP] Teleport init failed: %s - %s", tostring(teleportResult), tostring(errorMessage)))
-        warn("[HOP] Retrying in 3 seconds...")
-        task.wait(3)
-        serverHop()
+        warn("[HOP] Will retry with next server...")
     end
 end)
 
--- Start hopping with retry system
-local hopSuccess = serverHop()
-
-if not hopSuccess then
-    warn("[HOP] Failed to hop after all retries. Waiting 10 seconds then trying again...")
-    task.wait(10)
-    serverHop()
-end
+-- Start infinite hopping loop - NEVER STOPS
+print("[HOP] Starting infinite server hop loop...")
+serverHop()  -- This function never returns - it loops forever
